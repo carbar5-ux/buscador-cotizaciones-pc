@@ -1,0 +1,7 @@
+__pycache__/
+.venv/
+registro.log
+*.xlsx
+*_datos.json
+*.tmp
+pruebas/ejemplos/
