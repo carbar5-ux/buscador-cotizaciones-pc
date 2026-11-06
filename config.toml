@@ -30,3 +30,6 @@ ocr = true
 
 # Si borras un PDF de la carpeta, se quita también del Excel
 quitar_borrados = true
+
+# Cuántos PDF leer a la vez. 0 = automático (según los núcleos del PC)
+procesos = 0
