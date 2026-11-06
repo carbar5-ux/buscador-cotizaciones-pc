@@ -469,11 +469,14 @@ def _fila_a_item(fila: list, mapa: dict[str, int], formato: str, pagina: int) ->
     )
 
 
-def items_desde_tablas(pdf, formato: str) -> list[Item]:
+def items_desde_tablas(pdf, formato: str, paginas: set[int] | None = None) -> list[Item]:
+    """Ítems de las tablas con bordes. `paginas` (1, 2, ...) limita qué páginas revisar."""
     items: list[Item] = []
     mapa: dict[str, int] | None = None
     ncols = 0
     for npag, pagina in enumerate(pdf.pages, start=1):
+        if paginas is not None and npag not in paginas:
+            continue
         if not (pagina.lines or pagina.rects):  # sin líneas no hay tabla con bordes: ahorra tiempo
             continue
         try:
@@ -716,6 +719,38 @@ def controlar(cot: Cotizacion) -> None:
 # --------------------------------------------------------------------------
 
 
+def leer_rapido(ruta: Path) -> tuple[list[str], set[int]] | None:
+    """Texto de cada página con pdfium (muy rápido) y qué páginas tienen líneas dibujadas.
+
+    Devuelve None si pdfium no puede abrir el archivo (se usa entonces pdfplumber).
+    """
+    try:
+        import pypdfium2 as pdfium
+        import pypdfium2.raw as pdfium_c
+    except ImportError:
+        return None
+    try:
+        doc = pdfium.PdfDocument(str(ruta))
+    except Exception:
+        return None
+    textos: list[str] = []
+    con_lineas: set[int] = set()
+    try:
+        for i in range(len(doc)):
+            pagina = doc[i]
+            tp = pagina.get_textpage()
+            textos.append(tp.get_text_range().replace("\r\n", "\n").replace("\r", "\n"))
+            tp.close()
+            if any(o.type == pdfium_c.FPDF_PAGEOBJ_PATH for o in pagina.get_objects(max_depth=3)):
+                con_lineas.add(i + 1)
+            pagina.close()
+    except Exception:
+        return None
+    finally:
+        doc.close()
+    return textos, con_lineas
+
+
 def extraer_cotizacion(
     ruta: Path,
     *,
@@ -725,32 +760,38 @@ def extraer_cotizacion(
     usar_ocr: bool = True,
 ) -> Cotizacion:
     cot = Cotizacion(archivo=str(ruta))
-    with pdfplumber.open(ruta) as pdf:
-        cot.paginas = len(pdf.pages)
-        paginas_texto = [(p.extract_text(layout=False) or "") for p in pdf.pages]
-        texto = "\n".join(paginas_texto)
-        if len(texto.strip()) < 40:
-            textos_ocr = ocr_pdf(ruta) if usar_ocr else None
-            if not textos_ocr:
-                cot.metodo = "sin texto"
-                cot.observaciones.append(
-                    "PDF escaneado (imagen) sin texto: instale Tesseract OCR para leerlo" if usar_ocr
-                    else "PDF escaneado (imagen) sin texto"
-                )
-                return cot
-            paginas_texto = textos_ocr
-            texto = "\n".join(textos_ocr)
-            cot.metodo = "OCR"
-            cot.items = items_desde_texto(paginas_texto, formato)
-        else:
-            cot.items = items_desde_tablas(pdf, formato)
-            cot.metodo = "tablas"
-            items_txt = items_desde_texto(paginas_texto, formato)
-            # usar texto si encontró más líneas consistentes que las tablas
-            if len(items_txt) > len(cot.items):
-                cot.items, cot.metodo = items_txt, "texto"
+    rapido = leer_rapido(ruta)
+    if rapido is not None:
+        paginas_texto, con_lineas = rapido
+    else:  # respaldo: todo con pdfplumber
+        with pdfplumber.open(ruta) as pdf:
+            paginas_texto = [(p.extract_text(layout=False) or "") for p in pdf.pages]
+        con_lineas = set(range(1, len(paginas_texto) + 1))
+    cot.paginas = len(paginas_texto)
+    texto = "\n".join(paginas_texto)
+
+    if len(texto.strip()) < 40:
+        textos_ocr = ocr_pdf(ruta) if usar_ocr else None
+        if not textos_ocr:
+            cot.metodo = "sin texto"
+            cot.observaciones.append(
+                "PDF escaneado (imagen) sin texto: instale Tesseract OCR para leerlo" if usar_ocr
+                else "PDF escaneado (imagen) sin texto"
+            )
+            return cot
+        paginas_texto = textos_ocr
+        texto = "\n".join(textos_ocr)
+        cot.metodo = "OCR"
+        cot.items = items_desde_texto(paginas_texto, formato)
+    else:
+        cot.items, cot.metodo = [], "tablas"
+        if con_lineas:  # el lector de tablas (lento) solo en páginas con líneas dibujadas
+            with pdfplumber.open(ruta) as pdf:
+                cot.items = items_desde_tablas(pdf, formato, con_lineas)
+        items_txt = items_desde_texto(paginas_texto, formato)
+        # usar texto si encontró más líneas consistentes que las tablas
+        if len(items_txt) > len(cot.items):
+            cot.items, cot.metodo = items_txt, "texto"
     extraer_encabezado(cot, texto, mis_ruts or set(), formato, dias_validez)
-    if not cot.proveedor:
-        cot.proveedor = ""
     controlar(cot)
     return cot
