@@ -37,6 +37,9 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 | `procesar.bat` | Lee la carpeta una vez y actualiza el Excel. |
 | `vigilar.bat` | Queda abierto revisando la carpeta cada 10 segundos y actualiza el Excel cuando llegan, cambian o se borran cotizaciones. |
 | `iniciar_con_windows.bat` | Hace que la vigilancia parta sola y en segundo plano cada vez que enciendes el PC. |
+| `abrir_excel.bat` | Abre el Excel base directamente. |
+
+Mientras lee, muestra una barra con el porcentaje y el tiempo que falta, y lee varios PDF a la vez (uno por núcleo del procesador). La primera lectura de una carpeta grande es la que más demora; después solo lee las cotizaciones nuevas. El Excel se crea al partir y se va actualizando cada 25 cotizaciones leídas.
 
 La primera vez te pregunta cuál es tu carpeta de cotizaciones y la guarda en `config.toml`. Para cambiarla: `procesar.bat --configurar`.
 
@@ -57,6 +60,7 @@ El Excel queda en tu carpeta de cotizaciones como `Base_Cotizaciones.xlsx`. Junt
 | `dias_aviso_vencimiento` | Días antes del vencimiento para marcar “Por vencer”. |
 | `mis_ruts` | RUT de tu empresa, ej. `['77.888.999-K']`, para no confundirlo con el del proveedor. |
 | `quitar_borrados` | Si borras un PDF, también se quita del Excel. |
+| `procesos` | Cuántos PDF leer a la vez (0 = automático). |
 
 ## PDF escaneados (opcional)
 

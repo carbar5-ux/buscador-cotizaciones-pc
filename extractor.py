@@ -474,6 +474,8 @@ def items_desde_tablas(pdf, formato: str) -> list[Item]:
     mapa: dict[str, int] | None = None
     ncols = 0
     for npag, pagina in enumerate(pdf.pages, start=1):
+        if not (pagina.lines or pagina.rects):  # sin líneas no hay tabla con bordes: ahorra tiempo
+            continue
         try:
             tablas = pagina.extract_tables()
         except Exception:

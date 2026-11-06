@@ -15,9 +15,11 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -46,6 +48,7 @@ CONFIG_DEFECTO = {
     "mis_ruts": [],
     "ocr": True,
     "quitar_borrados": True,
+    "procesos": 0,
 }
 
 
@@ -178,14 +181,72 @@ def buscar_pdfs(carpeta: Path, recursivo: bool) -> list[Path]:
     )
 
 
-def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False) -> bool:
+def _leer_pdf(ruta: str, opciones: dict) -> dict:
+    """Lee un PDF (se ejecuta en un proceso aparte para aprovechar todos los núcleos)."""
+    try:
+        return extraer_cotizacion(Path(ruta), **opciones).to_dict()
+    except Exception as e:  # PDF dañado, protegido, etc.
+        return {"archivo": ruta, "metodo": "error", "observaciones": [f"No se pudo leer el PDF: {e}"], "items": []}
+
+
+def _resumen(datos: dict) -> str:
+    total = datos.get("total")
+    return " | ".join([
+        datos.get("proveedor") or "¿proveedor?", datos.get("fecha") or "¿fecha?", f"N° {datos.get('numero') or '-'}",
+        f"{len(datos.get('items', []))} ítems",
+        f"total {datos.get('moneda', '')} {total:,.0f}" if total is not None else "total -",
+    ])
+
+
+class Barra:
+    """Barra de progreso en la consola: [██████░░░░]  60%  12/20  quedan ~1 min."""
+
+    def __init__(self, total: int):
+        self.total, self.hechos, self.inicio = total, 0, time.monotonic()
+        self.activa = sys.stdout is not None and total > 0
+        self.llenos, self.vacios = "█", "░"
+        try:
+            (self.llenos + self.vacios).encode(sys.stdout.encoding or "utf-8")
+        except (UnicodeEncodeError, LookupError, AttributeError):
+            self.llenos, self.vacios = "#", "-"
+        self.dibujar("")
+
+    def avanzar(self, nombre: str) -> None:
+        self.hechos += 1
+        self.dibujar(nombre)
+
+    def dibujar(self, nombre: str) -> None:
+        if not self.activa:
+            return
+        pct = self.hechos / self.total
+        lleno = int(30 * pct)
+        resto = ""
+        if self.hechos:
+            seg = (time.monotonic() - self.inicio) / self.hechos * (self.total - self.hechos)
+            resto = f"quedan ~{seg:.0f} s" if seg < 90 else f"quedan ~{seg / 60:.0f} min"
+        texto = (f"\r[{self.llenos * lleno}{self.vacios * (30 - lleno)}] {pct:4.0%}  "
+                 f"{self.hechos}/{self.total}  {resto:<16} {Path(nombre).name[:35]:<35}")
+        sys.stdout.write(texto)
+        sys.stdout.flush()
+
+    def cerrar(self) -> None:
+        if self.activa:
+            seg = time.monotonic() - self.inicio
+            sys.stdout.write(f"\r{' ' * 110}\r")
+            sys.stdout.flush()
+            log.info("Leídas %d cotizaciones en %s.", self.total, f"{seg:.0f} s" if seg < 90 else f"{seg / 60:.1f} min")
+
+
+def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guardar=None) -> bool:
     """Lee los PDF nuevos o modificados. Devuelve True si algo cambió."""
     cambios = False
     pdfs = buscar_pdfs(carpeta, cfg["incluir_subcarpetas"])
     vigentes = set()
     por_hash = {reg["hash"]: clave for clave, reg in db.items()}
     ahora = time.time()
+    pendientes: list[tuple[str, Path, os.stat_result, str]] = []
 
+    # 1) qué hay que leer (rápido: solo fecha y tamaño; huella solo si cambió)
     for pdf in pdfs:
         clave = pdf.relative_to(carpeta).as_posix()
         vigentes.add(clave)
@@ -206,28 +267,50 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False) -> bo
         if reg and reg["hash"] == h and not reprocesar:
             reg["tamano"], reg["mtime"] = st.st_size, st.st_mtime
             continue
-        # archivo renombrado/movido: reutilizar lo ya leído
         anterior = por_hash.get(h)
         if anterior and anterior in db and not reprocesar and anterior != clave:
-            datos = dict(db[anterior]["datos"], archivo=str(pdf))
+            # archivo renombrado/movido: reutilizar lo ya leído
+            db[clave] = dict(db[anterior], tamano=st.st_size, mtime=st.st_mtime,
+                             datos=dict(db[anterior]["datos"], archivo=str(pdf)))
             log.info("Renombrado/movido: %s -> %s", anterior, clave)
+            cambios = True
+            continue
+        pendientes.append((clave, pdf, st, h))
+
+    # 2) leer los PDF pendientes, varios a la vez, con barra de progreso
+    if pendientes:
+        log.info("Cotizaciones por leer: %d", len(pendientes))
+        opciones = {"mis_ruts": set(cfg["mis_ruts"]), "formato": cfg["formato_numeros"],
+                    "dias_validez": int(cfg["dias_validez_por_defecto"]), "usar_ocr": bool(cfg["ocr"])}
+        nucleos = int(cfg.get("procesos") or 0) or max(1, (os.cpu_count() or 2) - 1)
+        nucleos = min(nucleos, len(pendientes))
+        barra = Barra(len(pendientes))
+
+        def registrar(clave: str, st: os.stat_result, h: str, datos: dict) -> None:
+            db[clave] = {"hash": h, "tamano": st.st_size, "mtime": st.st_mtime,
+                         "procesado": datetime.now().isoformat(timespec="seconds"), "datos": datos}
+            por_hash[h] = clave
+            detalle = f"Error en {clave}: {datos['observaciones'][0]}" if datos.get("metodo") == "error" \
+                else f"{clave}  ->  {_resumen(datos)}"
+            log.info(detalle, extra={"solo_archivo": barra.activa})
+            barra.avanzar(clave)
+            if guardar and barra.hechos % 25 == 0:
+                guardar()  # avance guardado: si se corta, no parte de cero
+
+        if nucleos == 1:
+            for clave, pdf, st, h in pendientes:
+                registrar(clave, st, h, _leer_pdf(str(pdf), opciones))
         else:
-            log.info("Leyendo %s ...", clave)
-            try:
-                cot = extraer_cotizacion(
-                    pdf, mis_ruts=set(cfg["mis_ruts"]), formato=cfg["formato_numeros"],
-                    dias_validez=int(cfg["dias_validez_por_defecto"]), usar_ocr=bool(cfg["ocr"]),
-                )
-                datos = cot.to_dict()
-                log.info("   %s | %s | N° %s | %s ítems | total %s %s",
-                         cot.proveedor or "¿proveedor?", cot.fecha or "¿fecha?", cot.numero or "-",
-                         len(cot.items), cot.moneda, f"{cot.total:,.0f}" if cot.total is not None else "-")
-            except Exception as e:  # PDF dañado, protegido, etc.
-                log.error("   Error leyendo %s: %s", clave, e)
-                datos = {"archivo": str(pdf), "metodo": "error", "observaciones": [f"No se pudo leer el PDF: {e}"], "items": []}
-        db[clave] = {"hash": h, "tamano": st.st_size, "mtime": st.st_mtime,
-                     "procesado": datetime.now().isoformat(timespec="seconds"), "datos": datos}
-        por_hash[h] = clave
+            with ProcessPoolExecutor(max_workers=nucleos) as pool:
+                tareas = {pool.submit(_leer_pdf, str(pdf), opciones): (clave, st, h) for clave, pdf, st, h in pendientes}
+                for fut in as_completed(tareas):
+                    clave, st, h = tareas[fut]
+                    try:
+                        datos = fut.result()
+                    except Exception as e:  # el proceso que leía ese PDF se cayó
+                        datos = {"archivo": clave, "metodo": "error", "observaciones": [f"No se pudo leer el PDF: {e}"], "items": []}
+                    registrar(clave, st, h, datos)
+        barra.cerrar()
         cambios = True
 
     if cfg["quitar_borrados"]:
@@ -243,11 +326,11 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False) -> bo
 # --------------------------------------------------------------------------
 
 
-def actualizar_excel(cfg: dict, carpeta: Path, db: dict) -> bool:
+def actualizar_excel(cfg: dict, carpeta: Path, db: dict, en_barra: bool = False) -> bool:
     excel = Path(cfg["_excel"])
     try:
         construir_excel(db, carpeta, excel, int(cfg["dias_aviso_vencimiento"]))
-        log.info("Excel actualizado: %s (%d cotizaciones)", excel, len(db))
+        log.info("Excel actualizado: %s (%d cotizaciones)", excel, len(db), extra={"solo_archivo": en_barra})
         return True
     except PermissionError:
         log.warning("El Excel está abierto. Ciérralo y se actualizará en la próxima pasada.")
@@ -261,11 +344,15 @@ def main() -> int:
     ap.add_argument("--configurar", action="store_true", help="elegir la carpeta de cotizaciones")
     ap.add_argument("--carpeta", type=Path, help="carpeta de cotizaciones (no la guarda en config)")
     ap.add_argument("--excel", type=Path, help="ruta del Excel de salida")
+    ap.add_argument("--abrir", action="store_true", help="abre el Excel base")
     args = ap.parse_args()
 
     manejadores: list[logging.Handler] = [logging.FileHandler(BASE / "registro.log", encoding="utf-8")]
     if sys.stdout is not None:  # con pythonw (segundo plano) no hay consola
-        manejadores.append(logging.StreamHandler(sys.stdout))
+        consola = logging.StreamHandler(sys.stdout)
+        # el detalle de cada PDF va solo al registro mientras se muestra la barra
+        consola.addFilter(lambda r: not getattr(r, "solo_archivo", False))
+        manejadores.append(consola)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%d-%m %H:%M:%S",
                         handlers=manejadores)
 
@@ -286,9 +373,29 @@ def main() -> int:
     cfg["_excel"] = str(excel.resolve())
     archivo_db = excel.with_name(excel.stem + "_datos.json")
 
+    if args.abrir:
+        if not excel.exists():
+            log.error("Todavía no existe el Excel: %s\nEjecuta primero vigilar.bat o procesar.bat.", excel)
+            return 1
+        log.info("Abriendo %s", excel)
+        if hasattr(os, "startfile"):
+            os.startfile(excel)  # Windows
+        return 0
+
     db = cargar_db(archivo_db)
-    log.info("Carpeta: %s", carpeta)
-    cambios = escanear(cfg, carpeta, db, args.reprocesar) or not excel.exists()
+    log.info("Carpeta de cotizaciones: %s", carpeta)
+    log.info("=" * 70)
+    log.info("EL EXCEL SE GUARDA EN:  %s", excel)
+    log.info("(para abrirlo directo usa  abrir_excel.bat)")
+    log.info("=" * 70)
+    if not excel.exists():
+        actualizar_excel(cfg, carpeta, db)  # se crea de inmediato y se va llenando
+
+    def guardar_avance() -> None:
+        guardar_db(archivo_db, db)
+        actualizar_excel(cfg, carpeta, db, en_barra=True)
+
+    cambios = escanear(cfg, carpeta, db, args.reprocesar, guardar_avance)
     guardar_db(archivo_db, db)
     pendiente = cambios and not actualizar_excel(cfg, carpeta, db)
     if not cambios:
@@ -306,7 +413,7 @@ def main() -> int:
             if not carpeta.is_dir():
                 log.warning("La carpeta no está disponible; reintentando...")
                 continue
-            if escanear(cfg, carpeta, db):
+            if escanear(cfg, carpeta, db, guardar=guardar_avance):
                 guardar_db(archivo_db, db)
                 pendiente = True
             if pendiente:
