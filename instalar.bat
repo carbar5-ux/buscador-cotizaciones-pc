@@ -7,6 +7,7 @@ where py >nul 2>nul && (set PY=py -3) || (set PY=python)
 if not exist .venv %PY% -m venv .venv
 .venv\Scripts\python -m pip install --upgrade pip
 .venv\Scripts\python -m pip install -r requirements.txt
+call crear_acceso_directo.bat /sinpausa
 echo.
 echo Listo. Ahora ejecuta "procesar.bat" (una vez) o "vigilar.bat" (queda atento a cotizaciones nuevas).
 pause

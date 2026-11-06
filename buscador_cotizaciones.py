@@ -181,6 +181,21 @@ def buscar_pdfs(carpeta: Path, recursivo: bool) -> list[Path]:
     )
 
 
+def _prioridad_baja() -> None:
+    """Los procesos lectores usan todo el procesador libre sin trabar el PC."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            BELOW_NORMAL_PRIORITY_CLASS = 0x4000
+            ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(),
+                                                    BELOW_NORMAL_PRIORITY_CLASS)
+        else:
+            os.nice(5)
+    except Exception:
+        pass
+
+
 def _leer_pdf(ruta: str, opciones: dict) -> dict:
     """Lee un PDF (se ejecuta en un proceso aparte para aprovechar todos los núcleos)."""
     try:
@@ -282,9 +297,11 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
         log.info("Cotizaciones por leer: %d", len(pendientes))
         opciones = {"mis_ruts": set(cfg["mis_ruts"]), "formato": cfg["formato_numeros"],
                     "dias_validez": int(cfg["dias_validez_por_defecto"]), "usar_ocr": bool(cfg["ocr"])}
-        nucleos = int(cfg.get("procesos") or 0) or max(1, (os.cpu_count() or 2) - 1)
+        nucleos = int(cfg.get("procesos") or 0) or (os.cpu_count() or 2)  # todos los núcleos
         nucleos = min(nucleos, len(pendientes))
+        log.info("Usando %d núcleo(s) del procesador.", nucleos)
         barra = Barra(len(pendientes))
+        ultimo_guardado = time.monotonic()
 
         def registrar(clave: str, st: os.stat_result, h: str, datos: dict) -> None:
             db[clave] = {"hash": h, "tamano": st.st_size, "mtime": st.st_mtime,
@@ -294,14 +311,16 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
                 else f"{clave}  ->  {_resumen(datos)}"
             log.info(detalle, extra={"solo_archivo": barra.activa})
             barra.avanzar(clave)
-            if guardar and barra.hechos % 25 == 0:
-                guardar()  # avance guardado: si se corta, no parte de cero
+            nonlocal ultimo_guardado
+            if guardar and time.monotonic() - ultimo_guardado > 60:
+                guardar()  # avance guardado cada minuto: si se corta, no parte de cero
+                ultimo_guardado = time.monotonic()
 
         if nucleos == 1:
             for clave, pdf, st, h in pendientes:
                 registrar(clave, st, h, _leer_pdf(str(pdf), opciones))
         else:
-            with ProcessPoolExecutor(max_workers=nucleos) as pool:
+            with ProcessPoolExecutor(max_workers=nucleos, initializer=_prioridad_baja) as pool:
                 tareas = {pool.submit(_leer_pdf, str(pdf), opciones): (clave, st, h) for clave, pdf, st, h in pendientes}
                 for fut in as_completed(tareas):
                     clave, st, h = tareas[fut]
