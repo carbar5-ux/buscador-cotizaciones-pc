@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import json
 import logging
+import re
 import sys
 import time
 from datetime import datetime
@@ -63,11 +64,42 @@ def _toml_valor(v) -> str:
     return "'" + str(v).replace("'", "") + "'"  # literal: respeta las \ de Windows
 
 
+_LINEA_RUTA = re.compile(r"^(\s*(?:carpeta_cotizaciones|archivo_excel)\s*=\s*)(.*?)\s*$")
+
+
+def _reparar_rutas(texto: str) -> str:
+    """Arregla las rutas mal escritas: sin comillas, comillas dobles con \\, comillas de más."""
+    lineas = []
+    for linea in texto.splitlines():
+        m = _LINEA_RUTA.match(linea)
+        if m:
+            valor = m.group(2).strip().strip("'\"‘’“”").strip()
+            linea = f"{m.group(1)}'{valor}'"
+        lineas.append(linea)
+    return "\n".join(lineas) + "\n"
+
+
 def leer_config() -> dict:
     cfg = dict(CONFIG_DEFECTO)
-    if CONFIG.exists():
-        with CONFIG.open("rb") as f:
-            cfg.update(tomllib.load(f))
+    if not CONFIG.exists():
+        return cfg
+    texto = CONFIG.read_text(encoding="utf-8-sig")
+    try:
+        cfg.update(tomllib.loads(texto))
+        return cfg
+    except tomllib.TOMLDecodeError:
+        pass
+    reparado = _reparar_rutas(texto)
+    try:
+        cfg.update(tomllib.loads(reparado))
+    except tomllib.TOMLDecodeError as e:
+        sys.exit(
+            f"\nHay un error en config.toml: {e}\n"
+            "Revisa esa línea. Las rutas van entre comillas simples, por ejemplo:\n"
+            "    carpeta_cotizaciones = 'C:\\Users\\Carlos\\Documents\\Cotizaciones'\n"
+        )
+    CONFIG.write_text(reparado, encoding="utf-8")
+    print("Se corrigió el formato de la ruta en config.toml.")
     return cfg
 
 
