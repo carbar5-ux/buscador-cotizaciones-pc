@@ -1,0 +1,32 @@
+# Configuración del Buscador de cotizaciones.
+# Las rutas van entre comillas simples para que las \ de Windows funcionen tal cual.
+
+# Carpeta donde guardas las cotizaciones PDF (si la dejas vacía, el programa te la pregunta)
+carpeta_cotizaciones = ''
+
+# Excel de salida. Vacío = "Base_Cotizaciones.xlsx" dentro de la carpeta de cotizaciones
+archivo_excel = ''
+
+# Buscar también en subcarpetas (por proveedor, por obra, por mes...)
+incluir_subcarpetas = true
+
+# Cada cuántos segundos revisa si llegaron cotizaciones nuevas (modo vigilancia)
+intervalo_segundos = 10
+
+# 'chile' = 1.234.567,89   |   'us' = 1,234,567.89
+formato_numeros = 'chile'
+
+# Si la cotización no indica validez, se asume esta cantidad de días
+dias_validez_por_defecto = 30
+
+# Marca "Por vencer" las cotizaciones que vencen dentro de estos días
+dias_aviso_vencimiento = 7
+
+# RUT de tu(s) empresa(s): así no se confunden con el RUT del proveedor
+mis_ruts = []
+
+# Leer PDF escaneados (imagen) con Tesseract OCR, si está instalado
+ocr = true
+
+# Si borras un PDF de la carpeta, se quita también del Excel
+quitar_borrados = true
