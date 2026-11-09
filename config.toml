@@ -39,3 +39,9 @@ aviso_sonido = true
 aviso_ventana = true
 # En modo vigilancia, la ventana sale solo si llegan al menos estas cotizaciones juntas (si son menos, solo suena)
 avisar_desde = 5
+
+# Actualización automática desde GitHub (busca versiones nuevas al abrir y cada N horas)
+actualizar_automatico = true
+horas_entre_actualizaciones = 6
+# Solo si el repositorio de GitHub es PRIVADO: clave de solo lectura (ver README)
+token_github = ''
