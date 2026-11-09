@@ -32,7 +32,7 @@ import tomllib  # noqa: E402
 
 from actualizador import actualizar_si_hay, version_local
 from agrupador import asegurar_sinonimos
-from clasificador import clasificar_y_copiar, es_clasificada, fecha_archivo
+from clasificador import clasificar_una, clasificar_y_copiar, es_clasificada, fecha_archivo, leer_categorias
 from consola import Barra, ManejadorConsola, _duracion, estado_vigilancia, terminado
 from excel_writer import construir_excel
 from extractor import extraer_cotizacion
@@ -351,10 +351,15 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
         nucleos = int(cfg.get("procesos") or 0) or (os.cpu_count() or 2)  # todos los núcleos
         nucleos = min(nucleos, len(pendientes))
         log.info("Usando %d núcleo(s) del procesador.", nucleos)
+        categorias = leer_categorias() if cfg.get("clasificar", True) else None
+        copias = 0
         barra = Barra(len(pendientes))
         ultimo_guardado = time.monotonic()
 
         def registrar(clave: str, st: os.stat_result, h: str, datos: dict) -> None:
+            nonlocal copias
+            if categorias is not None:  # se copia a su carpeta apenas se lee
+                copias += clasificar_una(datos, clave, carpeta, categorias)
             db[clave] = {"hash": h, "tamano": st.st_size, "mtime": st.st_mtime,
                          "procesado": datetime.now().isoformat(timespec="seconds"), "datos": datos}
             por_hash[h] = clave
@@ -384,6 +389,8 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
                         datos = {"archivo": clave, "metodo": "error", "observaciones": [f"No se pudo leer el PDF: {e}"], "items": []}
                     registrar(clave, st, h, datos)
         seg = barra.cerrar()
+        if copias:
+            log.info("Copias a las carpetas de categoría en esta lectura: %d", copias)
         log.info("Leídas %d cotizaciones en %s.", len(pendientes), _duracion(seg), extra={"solo_archivo": barra.activa})
         cfg["_ultima_lectura"] = (len(pendientes), seg)
         cambios = True

@@ -75,7 +75,7 @@ Cables: cable, conductor, alambre, thhn, awg
 Alumbrado: luminaria, foco, led, reflector, proyector
 ```
 
-Una cotización entra a una categoría si alguna de sus líneas (descripción o código) o el nombre del archivo contiene una de esas palabras (sin importar mayúsculas ni tildes). Al guardar el archivo, el programa reclasifica todo solo. En el Excel, la columna **Categorías** (Cotizaciones) y **Categoría** (Ítems) permiten filtrar, y el Resumen cuenta cotizaciones por categoría. El botón **Clasificadas** abre la carpeta de copias.
+Cada PDF se copia a su carpeta **apenas se lee** (no al final). Una cotización entra a una categoría si alguna de sus líneas (descripción o código) o el nombre del archivo contiene una de esas palabras (sin importar mayúsculas ni tildes). Al guardar el archivo, el programa reclasifica todo solo. En el Excel, la columna **Categorías** (Cotizaciones) y **Categoría** (Ítems) permiten filtrar, y el Resumen cuenta cotizaciones por categoría. El botón **Clasificadas** abre la carpeta de copias.
 
 ## Abrir el PDF desde el Excel
 
@@ -121,6 +121,8 @@ Si el repositorio es **público**, no hace falta clave.
 Si una cotización es una foto o un escaneo, el PDF no tiene texto. Para leerlos instala **Tesseract OCR** (<https://github.com/UB-Mannheim/tesseract/wiki>, incluye el idioma español) y luego ejecuta `procesar.bat --reprocesar`. Sin Tesseract, esos PDF aparecen en la hoja **Revisar**.
 
 ## Cómo lee los PDF y sus límites
+
+Los **catálogos, fichas técnicas y planos** que estén en la carpeta se detectan solos (no tienen palabras como precio, total, IVA o $): se leen en menos de un segundo, sin buscar tablas, y quedan en **Revisar** como "No parece una cotización". Las páginas con miles de trazos (planos, diagramas) tampoco se revisan buscando tablas.
 
 Cada proveedor arma su cotización distinta, así que el programa usa reglas generales: busca la tabla de detalle por sus encabezados (Descripción, Cantidad, Precio unitario, Total…) y, si el PDF no tiene tabla con bordes, reconoce las líneas que terminan en cantidad, precio y total y comprueba que cuadren. Los datos del encabezado se buscan por sus etiquetas habituales (“Fecha:”, “Forma de pago:”, “Validez:”, “RUT”…).
 
