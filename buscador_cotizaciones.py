@@ -18,6 +18,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
@@ -49,6 +50,9 @@ CONFIG_DEFECTO = {
     "ocr": True,
     "quitar_borrados": True,
     "procesos": 0,
+    "aviso_ventana": True,
+    "aviso_sonido": True,
+    "avisar_desde": 5,
 }
 
 
@@ -244,12 +248,69 @@ class Barra:
         sys.stdout.write(texto)
         sys.stdout.flush()
 
-    def cerrar(self) -> None:
+    def cerrar(self) -> float:
+        seg = time.monotonic() - self.inicio
         if self.activa:
-            seg = time.monotonic() - self.inicio
             sys.stdout.write(f"\r{' ' * 110}\r")
             sys.stdout.flush()
-            log.info("Leídas %d cotizaciones en %s.", self.total, f"{seg:.0f} s" if seg < 90 else f"{seg / 60:.1f} min")
+        log.info("Leídas %d cotizaciones en %s.", self.total, _duracion(seg))
+        return seg
+
+
+def _duracion(seg: float) -> str:
+    if seg < 90:
+        return f"{seg:.0f} segundos"
+    if seg < 5400:
+        return f"{seg / 60:.0f} minutos"
+    return f"{seg / 3600:.1f} horas"
+
+
+def _titulo_consola(texto: str) -> None:
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleTitleW(texto)
+        except Exception:
+            pass
+
+
+def avisar_fin(cfg: dict, excel: Path, minimo: int, esperar: bool) -> None:
+    """Sonido y ventana emergente al terminar de leer cotizaciones."""
+    leidas, seg = cfg.pop("_ultima_lectura", (0, 0.0))
+    if not leidas:
+        return
+    _titulo_consola(f"Buscador de cotizaciones - Terminado: {leidas} leídas")
+    if sys.platform != "win32":
+        return
+    if cfg.get("aviso_sonido", True):
+        try:
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            pass
+    if not cfg.get("aviso_ventana", True) or leidas < minimo:
+        return
+
+    def ventana() -> None:
+        try:
+            import ctypes
+
+            mensaje = (f"Terminó la lectura de cotizaciones.\n\n"
+                       f"Cotizaciones leídas: {leidas}\nTiempo: {_duracion(seg)}\n\n"
+                       f"Excel: {excel}\n\n¿Abrir el Excel ahora?")
+            # MB_YESNO | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST
+            r = ctypes.windll.user32.MessageBoxW(0, mensaje, "Buscador de cotizaciones", 0x4 | 0x40 | 0x10000 | 0x40000)
+            if r == 6 and excel.exists():  # Sí
+                os.startfile(excel)
+        except Exception as e:
+            log.warning("No se pudo mostrar el aviso: %s", e)
+
+    if esperar:
+        ventana()
+    else:  # en modo vigilancia el programa sigue trabajando mientras el aviso está abierto
+        threading.Thread(target=ventana, daemon=True).start()
 
 
 def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guardar=None) -> bool:
@@ -329,7 +390,7 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
                     except Exception as e:  # el proceso que leía ese PDF se cayó
                         datos = {"archivo": clave, "metodo": "error", "observaciones": [f"No se pudo leer el PDF: {e}"], "items": []}
                     registrar(clave, st, h, datos)
-        barra.cerrar()
+        cfg["_ultima_lectura"] = (len(pendientes), barra.cerrar())
         cambios = True
 
     if cfg["quitar_borrados"]:
@@ -419,6 +480,8 @@ def main() -> int:
     pendiente = cambios and not actualizar_excel(cfg, carpeta, db)
     if not cambios:
         log.info("Sin cotizaciones nuevas. Excel al día: %s", excel)
+    _titulo_consola("Buscador de cotizaciones - " + ("vigilando" if args.vigilar else "terminado"))
+    avisar_fin(cfg, excel, minimo=1, esperar=not args.vigilar)  # primera lectura: siempre avisa
 
     if not args.vigilar:
         return 0
@@ -437,6 +500,8 @@ def main() -> int:
                 pendiente = True
             if pendiente:
                 pendiente = not actualizar_excel(cfg, carpeta, db)
+            # cotizaciones sueltas: solo sonido; tandas grandes: también la ventana
+            avisar_fin(cfg, excel, minimo=int(cfg["avisar_desde"]), esperar=False)
     except KeyboardInterrupt:
         log.info("Vigilancia detenida.")
     return 0
