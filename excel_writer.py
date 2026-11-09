@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import os
+import re
 import statistics
 from copy import copy
 import tempfile
@@ -11,7 +13,6 @@ from datetime import date, datetime
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -136,10 +137,19 @@ AZUL_LINK = Font(color="0563C1", underline="single")
 AZUL_BOTON = Font(color="0563C1", underline="single", bold=True)
 
 
+# Todo lo que XML 1.0 no admite (Excel da "Carácter xml no válido" y quita la hoja entera): controles,
+# controles C1 (\x7f-\x9f), mitades de emoji sueltas (sustitutos) y \ufffe / \uffff. El filtro de openpyxl
+# solo quita los controles ASCII.
+_NO_XML = re.compile("[^\t\n\r\u0020-\u007e\u00a0-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
+MAX_TEXTO_CELDA = 32767  # límite de caracteres de una celda en Excel
+
+
 def limpiar_texto(v):
-    """Quita caracteres de control que algunos PDF traen y que Excel no acepta en una celda."""
+    """Deja el valor listo para una celda: sin caracteres que Excel no acepta y sin números NaN/infinito."""
     if isinstance(v, str):
-        return ILLEGAL_CHARACTERS_RE.sub("", v)
+        return _NO_XML.sub("", v)[:MAX_TEXTO_CELDA]
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
     return v
 
 
