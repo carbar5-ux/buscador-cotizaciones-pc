@@ -191,9 +191,12 @@ def _version_guardada(ruta: Path) -> str:
         return ""
 
 
-def guardar_db(ruta: Path, db: dict) -> None:
+def guardar_db(ruta: Path, db: dict, programa: str | None = None) -> None:
+    """programa: versión que hizo el Excel actual. Solo pasa a la versión nueva cuando el Excel se rehízo de
+    verdad (si estaba abierto y no se pudo, la próxima vez se vuelve a intentar)."""
     tmp = ruta.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"version": VERSION_EXTRACTOR, "programa": version_local(), "cotizaciones": db},
+    programa = version_local() if programa is None else programa
+    tmp.write_text(json.dumps({"version": VERSION_EXTRACTOR, "programa": programa, "cotizaciones": db},
                               ensure_ascii=False, indent=1),
                    encoding="utf-8")
     tmp.replace(ruta)
@@ -517,8 +520,20 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
             os.startfile(excel)  # Windows
         return 0
 
+    _guardar_db, _actualizar_excel = globals()["guardar_db"], globals()["actualizar_excel"]
     db = cargar_db(archivo_db)
-    excel_de_otra_version = _version_guardada(archivo_db) != version_local()  # nuevo diseño: rehacer el Excel
+    version_excel = [_version_guardada(archivo_db)]  # versión que hizo el Excel que hay ahora
+    excel_de_otra_version = version_excel[0] != version_local()  # nuevo diseño: rehacer el Excel
+
+    def guardar_db(ruta: Path, datos: dict) -> None:
+        _guardar_db(ruta, datos, version_excel[0])
+
+    def actualizar_excel(*a, **k) -> bool:
+        hecho = _actualizar_excel(*a, **k)
+        if hecho and version_excel[0] != version_local():
+            version_excel[0] = version_local()
+            _guardar_db(archivo_db, db, version_excel[0])
+        return hecho
     if compartido is not None:  # la ventana usa estos datos para el buscador de precios
         compartido.update(db=db, carpeta=carpeta)
     log.info("Carpeta de cotizaciones: %s", carpeta)
