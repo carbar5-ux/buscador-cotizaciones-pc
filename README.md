@@ -1,5 +1,7 @@
 # Buscador de cotizaciones PC
 
+Creado por **Carlos**. Manual de uso: [`Manual_de_uso.pdf`](Manual_de_uso.pdf).
+
 Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de tu computador (y sus subcarpetas), lee su contenido y arma un **Excel base** con toda la información. Si lo dejas en **modo vigilancia**, cada vez que guardas una cotización nueva en la carpeta el Excel se actualiza solo.
 
 ## Qué saca de cada cotización
@@ -39,7 +41,8 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 | `iniciar_con_windows.bat` | Hace que la vigilancia parta sola y en segundo plano cada vez que enciendes el PC. |
 | `abrir_excel.bat` | Abre el Excel base directamente. |
 | `actualizar.bat` | Busca e instala la última versión ahora. |
-| `crear_acceso_directo.bat` | Pone en el Escritorio dos accesos directos con signo **$**: **Buscador Cotizaciones** (verde) y **Excel Cotizaciones** (naranjo). `instalar.bat` ya los crea. |
+| `abrir_manual.bat` | Abre el manual de uso en PDF (`Manual_de_uso.pdf`). |
+| `crear_acceso_directo.bat` | Pone en el Escritorio accesos directos: **Buscador Cotizaciones** (verde $), **Excel Cotizaciones** (naranjo $) y **Manual Cotizaciones** (PDF). `instalar.bat` ya los crea. |
 
 Mientras lee, muestra una barra con el porcentaje y el tiempo que falta. Usa **todos los núcleos del procesador** (un PDF por núcleo) con prioridad baja, para no trabar el PC mientras trabajas. El texto se lee con pdfium, que es muy rápido, y el lector de tablas solo se usa en las páginas que tienen líneas dibujadas. La primera lectura de una carpeta grande es la que más demora; después solo lee las cotizaciones nuevas. El Excel se crea al partir y se actualiza cada minuto mientras lee.
 
