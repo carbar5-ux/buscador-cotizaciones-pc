@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import re
@@ -29,6 +30,8 @@ FMT_FECHA = "dd-mm-yyyy"
 FMT_ENTERO = "#,##0"
 FMT_DECIMAL = "#,##0.00"
 FMT_PCT = "0.0%"
+
+log = logging.getLogger("cotizaciones")
 
 ROJO = PatternFill("solid", fgColor="F8CBAD")
 AMARILLO = PatternFill("solid", fgColor="FFE699")
@@ -137,19 +140,26 @@ AZUL_LINK = Font(color="0563C1", underline="single")
 AZUL_BOTON = Font(color="0563C1", underline="single", bold=True)
 
 
-# Todo lo que XML 1.0 no admite (Excel da "Carácter xml no válido" y quita la hoja entera): controles,
-# controles C1 (\x7f-\x9f), mitades de emoji sueltas (sustitutos) y \ufffe / \uffff. El filtro de openpyxl
-# solo quita los controles ASCII.
-_NO_XML = re.compile("[^\t\n\r\u0020-\u007e\u00a0-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]")
+# Solo se dejan caracteres que Excel lee sin problemas (Excel da "Carácter xml no válido" y quita la hoja
+# entera). Se quitan: controles (también C1 \x7f-\x9f), mitades de emoji sueltas (sustitutos), uso privado
+# (íconos de fuentes de algunos PDF, sin significado), no-caracteres (\ufdd0-\ufdef, \ufffe, \uffff) y
+# especiales \ufff0-\ufffc. El filtro de openpyxl solo quita los controles ASCII.
+_NO_XML = re.compile("[^\t\n\r\u0020-\u007e\u00a0-\ud7ff\uf900-\ufdcf\ufdf0-\uffef\ufffd"
+                     "\U00010000-\U000efffd]")
+# Excel lee "_x000D_" dentro de un texto como un carácter codificado; se escribe como Excel lo espera
+# para que quede tal cual ("_x005F_" = "_").
+_ESCAPE_EXCEL = re.compile(r"_(x[0-9A-Fa-f]{4}_)")
 MAX_TEXTO_CELDA = 32767  # límite de caracteres de una celda en Excel
 
 
 def limpiar_texto(v):
     """Deja el valor listo para una celda: sin caracteres que Excel no acepta y sin números NaN/infinito."""
     if isinstance(v, str):
-        return _NO_XML.sub("", v)[:MAX_TEXTO_CELDA]
+        return _ESCAPE_EXCEL.sub(r"_x005F_\1", _NO_XML.sub("", v))[:MAX_TEXTO_CELDA]
     if isinstance(v, float) and not math.isfinite(v):
         return None
+    if isinstance(v, int) and not isinstance(v, bool) and abs(v) >= 10 ** 15:
+        return str(v)  # Excel no guarda más de 15 dígitos
     return v
 
 
@@ -486,7 +496,42 @@ def _guardar_atomico(wb: Workbook, destino: Path) -> None:
     os.close(fd)
     try:
         wb.save(tmp)
+        _verificar(tmp, [h.title for h in wb.worksheets])
         os.replace(tmp, destino)
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
+
+
+def _verificar(ruta: str, hojas: list[str]) -> bool:
+    """Lee cada hoja del Excel recién escrito con un lector XML estricto. Si alguna no se puede leer, anota en
+    registro.log la hoja, el carácter exacto y el texto que lo rodea (para corregirlo). Nunca detiene el guardado."""
+    import zipfile
+    from xml.parsers import expat
+    bien = True
+    try:
+        with zipfile.ZipFile(ruta) as z:
+            for nombre in z.namelist():
+                if not nombre.endswith((".xml", ".rels")):
+                    continue
+                datos = z.read(nombre)
+                lector = expat.ParserCreate()
+                try:
+                    lector.Parse(datos, True)
+                except expat.ExpatError as e:
+                    bien = False
+                    m = re.match(r"xl/worksheets/sheet(\d+)\.xml$", nombre)
+                    hoja = hojas[int(m.group(1)) - 1] if m and int(m.group(1)) <= len(hojas) else nombre
+                    lineas = datos.split(b"\n")
+                    linea = lineas[e.lineno - 1] if e.lineno - 1 < len(lineas) else b""
+                    texto = linea[max(0, e.offset - 150):e.offset + 60].decode("utf-8", "surrogatepass")
+                    raros = ", ".join(sorted({f"U+{ord(c):04X}" for c in _NO_XML.findall(texto)})) or "ninguno visible"
+                    log.warning("DIAGNÓSTICO Excel: hoja '%s' (%s) con error XML: %s (línea %d, columna %d). "
+                                "Caracteres raros: %s. Texto: %r", hoja, nombre, expat.ErrorString(e.code),
+                                e.lineno, e.offset, raros, texto)
+    except Exception:
+        log.exception("DIAGNÓSTICO Excel: no se pudo revisar el archivo")
+        return False
+    if bien:
+        log.info("Excel revisado: todas las hojas se leen bien.", extra={"solo_archivo": True})
+    return bien
