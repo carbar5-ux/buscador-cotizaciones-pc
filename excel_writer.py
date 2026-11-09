@@ -19,6 +19,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.indexed_list import IndexedList
 from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.views import Pane, Selection
 
 from agrupador import agrupar, descripcion_representativa
 from extractor import Cotizacion, normalizar
@@ -122,7 +123,7 @@ def _hoja(wb: Workbook, titulo: str, columnas: list[tuple[str, int, str | None]]
         lado = "center" if celda.column in centradas else "right" if celda.column in numericas else "left"
         celda.alignment = Alignment(wrap_text=True, vertical="center", horizontal=lado)
     ws.row_dimensions[1].height = 30
-    ws.freeze_panes = congelar
+    _inmovilizar(ws, congelar)
     ws.sheet_view.showGridLines = False
     ws.sheet_view.zoomScale = 100
     # impresión: horizontal, todas las columnas en el ancho de la hoja, encabezado repetido
@@ -137,6 +138,28 @@ def _hoja(wb: Workbook, titulo: str, columnas: list[tuple[str, int, str | None]]
         tabla.tableStyleInfo = TableStyleInfo(name="TableStyleLight15", showRowStripes=True)
         ws.add_table(tabla)
     return ws
+
+
+def _inmovilizar(ws, celda: str) -> None:
+    """Inmoviliza filas/columnas escribiendo la vista igual que Excel: cada panel con su celda seleccionada
+    dentro de él. (La de openpyxl deja la selección en A1, fuera del panel, y Excel "repara" la vista.)"""
+    from openpyxl.utils.cell import coordinate_from_string, column_index_from_string
+    letra, fila = coordinate_from_string(celda)
+    col = column_index_from_string(letra)
+    vista = ws.sheet_view
+    vista.selection = []
+    if col == 1 and fila == 1:
+        vista.pane = None
+        vista.selection = [Selection(activeCell="A1", sqref="A1")]
+        return
+    x, y = col - 1, fila - 1
+    activo = "bottomRight" if x and y else "bottomLeft" if y else "topRight"
+    vista.pane = Pane(xSplit=x or None, ySplit=y or None, topLeftCell=celda, activePane=activo, state="frozen")
+    if x and y:
+        arriba, izquierda = f"{letra}1", f"A{fila}"
+        vista.selection = [Selection(pane="topRight", activeCell=arriba, sqref=arriba),
+                           Selection(pane="bottomLeft", activeCell=izquierda, sqref=izquierda)]
+    vista.selection.append(Selection(pane=activo, activeCell=celda, sqref=celda))
 
 
 AZUL_LINK = Font(color="0563C1", underline="single")
@@ -487,6 +510,8 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     for h in wb.worksheets:
         h.sheet_properties.tabColor = colores.get(h.title, "9CA3AF")
     wb.active = 0
+    for i, h in enumerate(wb.worksheets):
+        h.sheet_view.tabSelected = i == 0  # la pestaña que se ve al abrir, marcada como lo hace Excel
 
     _guardar_atomico(wb, destino)
 
