@@ -79,7 +79,9 @@ Cada PDF se copia a su carpeta **apenas se lee** (no al final). Una cotización 
 
 ## Abrir el PDF desde el Excel
 
-En las hojas **Cotizaciones** e **Ítems**, la columna **PDF** tiene "Abrir PDF": un clic abre la cotización. También abren el PDF el nombre del archivo, los proveedores del **Comparativo** y los archivos de **Revisar**.
+Un clic en el **suministro** (la descripción) en las hojas **Precios** e **Ítems**, o en **Abrir PDF**, abre la cotización. Son vínculos normales de Excel (no fórmulas), así que funcionan aunque Excel tenga el cálculo en manual, y son relativos a la carpeta del Excel: siguen funcionando si se mueve la carpeta. También abren el PDF el nombre del archivo en Cotizaciones, los proveedores del Comparativo y los archivos de Revisar.
+
+El Excel usa encabezados verdes, sin cuadrícula, montos con formato `$` (o `US$` / `UF`), fechas y unidades centradas, pestañas de color, un Resumen con tarjetas y está listo para imprimir (horizontal, ajustado al ancho). Se rehace solo cuando se actualiza el programa.
 
 ## Actualización automática
 

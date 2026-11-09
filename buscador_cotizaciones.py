@@ -180,9 +180,21 @@ def cargar_db(ruta: Path) -> dict:
     return {}
 
 
+def _version_guardada(ruta: Path) -> str:
+    """Versión del programa que escribió por última vez los datos (y el Excel)."""
+    try:
+        with ruta.open(encoding="utf-8") as f:
+            inicio = f.read(300)
+        m = re.search(r'"programa":\s*"([^"]+)"', inicio)
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
 def guardar_db(ruta: Path, db: dict) -> None:
     tmp = ruta.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"version": VERSION_EXTRACTOR, "cotizaciones": db}, ensure_ascii=False, indent=1),
+    tmp.write_text(json.dumps({"version": VERSION_EXTRACTOR, "programa": version_local(), "cotizaciones": db},
+                              ensure_ascii=False, indent=1),
                    encoding="utf-8")
     tmp.replace(ruta)
 
@@ -506,6 +518,7 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
         return 0
 
     db = cargar_db(archivo_db)
+    excel_de_otra_version = _version_guardada(archivo_db) != version_local()  # nuevo diseño: rehacer el Excel
     if compartido is not None:  # la ventana usa estos datos para el buscador de precios
         compartido.update(db=db, carpeta=carpeta)
     log.info("Carpeta de cotizaciones: %s", carpeta)
@@ -516,11 +529,16 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
     if not excel.exists():
         actualizar_excel(cfg, carpeta, db)  # se crea de inmediato y se va llenando
 
-    def guardar_avance() -> None:
-        guardar_db(archivo_db, db)
-        actualizar_excel(cfg, carpeta, db, en_barra=True)
+    ultimo_excel = [time.monotonic()]
 
-    cambios = escanear(cfg, carpeta, db, args.reprocesar, guardar_avance)
+    def guardar_avance() -> None:
+        """Cada minuto se guardan los datos leídos; el Excel cada 3 minutos (rehacerlo pausa la lectura)."""
+        guardar_db(archivo_db, db)
+        if time.monotonic() - ultimo_excel[0] >= 180:
+            actualizar_excel(cfg, carpeta, db, en_barra=True)
+            ultimo_excel[0] = time.monotonic()
+
+    cambios = escanear(cfg, carpeta, db, args.reprocesar, guardar_avance) or excel_de_otra_version
     fecha_cat = fecha_archivo()
     fecha_sin = fecha_sinonimos()
     cambios = clasificar_y_copiar(db, carpeta, cfg, todo=True) or cambios  # por si cambiaron las categorías

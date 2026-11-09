@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import statistics
+from copy import copy
 import tempfile
 from collections import defaultdict
 from datetime import date, datetime
@@ -14,12 +15,15 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.indexed_list import IndexedList
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 from agrupador import agrupar, descripcion_representativa
 from extractor import Cotizacion, normalizar
 
-AZUL = "1F4E78"
+AZUL = "0B6E3A"  # verde de la ventana del buscador (encabezados y títulos)
+VERDE_OSC, GRIS_TXT, GRIS_FONDO, BORDE_SUAVE = "0B6E3A", "6B7280", "F3F5F7", "E5E7EB"
+FUENTE_XL = "Calibri"
 FMT_FECHA = "dd-mm-yyyy"
 FMT_ENTERO = "#,##0"
 FMT_DECIMAL = "#,##0.00"
@@ -38,7 +42,41 @@ def _fecha(iso: str) -> date | None:
 
 
 def _fmt_moneda(moneda: str) -> str:
-    return FMT_ENTERO if moneda in ("CLP", "") else FMT_DECIMAL
+    """Formato de moneda real de Excel: $ 1.234.567 / US$ 1.234,50 / UF 12,35."""
+    return {
+        "CLP": '"$" #,##0', "": '"$" #,##0', "USD": '"US$" #,##0.00', "UF": '"UF" #,##0.00', "EUR": '"€" #,##0.00',
+    }.get(moneda, FMT_DECIMAL)
+
+
+CENTRADAS = {"Fecha", "Unidad", "Moneda", "Estado", "Vence", "Ítem", "Página", "Páginas", "N° ítems", "ID", "ID cot.",
+             "PDF", "Lectura", "N° cotizaciones", "N° proveedores", "N° variantes", "Fecha mínimo", "Fecha último",
+             "Última cotización", "Cantidad", "N° cotización"}
+
+
+# Caché de estilos: aplicar un estilo en openpyxl es lento (compara objetos); cada combinación se calcula
+# una vez y luego se copia (miles de veces más rápido). Se vacía con cada libro nuevo.
+_CACHE_ESTILOS: dict[tuple, object] = {}
+LETRA_CUERPO = Font(name=FUENTE_XL, size=10)
+CENTRO = Alignment(horizontal="center", vertical="center")
+DERECHA = Alignment(horizontal="right", vertical="center")
+MEDIO = Alignment(vertical="center")
+_FUENTES_VINCULO: dict[bool, Font] = {
+    False: Font(name=FUENTE_XL, size=10, color="0563C1", underline="single"),
+    True: Font(name=FUENTE_XL, size=10, color="0563C1", underline="single", bold=True),
+}
+
+
+def _estilo(celda, **atributos) -> None:
+    base = tuple(celda._style) if celda._style is not None else ()
+    # los objetos de estilo son constantes del módulo: basta su identidad (mucho más rápido que compararlos)
+    clave = (base, tuple((k, v if isinstance(v, str) else id(v)) for k, v in atributos.items()))
+    guardado = _CACHE_ESTILOS.get(clave)
+    if guardado is None:
+        for k, v in atributos.items():
+            setattr(celda, k, v)
+        _CACHE_ESTILOS[clave] = copy(celda._style)
+    else:
+        celda._style = copy(guardado)
 
 
 def _hoja(wb: Workbook, titulo: str, columnas: list[tuple[str, int, str | None]], filas: list[list], nombre_tabla: str):
@@ -51,23 +89,45 @@ def _hoja(wb: Workbook, titulo: str, columnas: list[tuple[str, int, str | None]]
         fila = [limpiar_texto(v) for v in fila]
         ws.append([" " + v if isinstance(v, str) and v.startswith(("=", "+", "@")) and not v[1:2].isdigit() else v
                    for v in fila])
-    for idx, (_, ancho, fmt) in enumerate(columnas, start=1):
-        letra = get_column_letter(idx)
-        ws.column_dimensions[letra].width = ancho
-        if fmt:
-            for celda in ws[letra][1:]:
-                if fmt != "moneda":
-                    celda.number_format = fmt
+    for idx, (_, ancho, _fmt) in enumerate(columnas, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = ancho
+    # aspecto: letra limpia, formato de número por columna, centradas/derecha donde corresponde
+    centradas = {i for i, c in enumerate(columnas, start=1) if c[0] in CENTRADAS}
+    numericas = {i for i, c in enumerate(columnas, start=1) if c[2] in ("moneda", FMT_DECIMAL, FMT_ENTERO, FMT_PCT)}
+    formatos = {i: c[2] for i, c in enumerate(columnas, start=1) if c[2] and c[2] != "moneda"}
+    centro, derecha, medio = CENTRO, DERECHA, MEDIO
+    for fila_celdas in ws.iter_rows(min_row=2):
+        for celda in fila_celdas:
+            col = celda.column
+            fmt = formatos.get(col)
+            # cantidades enteras sin ",00"
+            if fmt == FMT_DECIMAL and isinstance(celda.value, float) and celda.value.is_integer():
+                fmt = FMT_ENTERO
+            if col in centradas or col in numericas or fmt:  # el resto usa el estilo por defecto del libro
+                alin = centro if col in centradas else derecha if col in numericas else medio
+                if fmt:
+                    _estilo(celda, alignment=alin, number_format=fmt)
+                else:
+                    _estilo(celda, alignment=alin)
     for celda in ws[1]:
-        celda.font = Font(bold=True, color="FFFFFF")
-        celda.fill = PatternFill("solid", fgColor=AZUL)
-        celda.alignment = Alignment(wrap_text=True, vertical="center")
-    ws.row_dimensions[1].height = 32
-    ws.freeze_panes = "B2" if titulo != "Resumen" else None
+        celda.font = Font(name=FUENTE_XL, bold=True, color="FFFFFF", size=10)
+        celda.fill = PatternFill("solid", fgColor=VERDE_OSC)
+        lado = "center" if celda.column in centradas else "right" if celda.column in numericas else "left"
+        celda.alignment = Alignment(wrap_text=True, vertical="center", horizontal=lado)
+    ws.row_dimensions[1].height = 30
+    ws.freeze_panes = "B2"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_view.zoomScale = 100
+    # impresión: horizontal, todas las columnas en el ancho de la hoja, encabezado repetido
+    ws.page_setup.orientation = "landscape"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_title_rows = "1:1"
     if filas:
         ref = f"A1:{get_column_letter(len(columnas))}{len(filas) + 1}"
         tabla = Table(displayName=nombre_tabla, ref=ref)
-        tabla.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+        tabla.tableStyleInfo = TableStyleInfo(name="TableStyleLight15", showRowStripes=True)
         ws.add_table(tabla)
     return ws
 
@@ -83,17 +143,35 @@ def limpiar_texto(v):
     return v
 
 
+# Carpeta del Excel (los vínculos son relativos a ella) y conteo por hoja: Excel admite hasta 65.530 por hoja.
+_BASE_VINCULOS: list[Path] = [Path(".")]
+_VINCULOS_POR_HOJA: dict[str, int] = defaultdict(int)
+MAX_VINCULOS_HOJA = 65000
+
+
+def _destino_vinculo(ruta: Path) -> str:
+    """Dirección del PDF como la escribe Excel: relativa a la carpeta del Excel si se puede (sigue
+    funcionando si se mueve la carpeta o cambia la letra del disco); si no, absoluta file:///."""
+    try:
+        rel = os.path.relpath(ruta, _BASE_VINCULOS[0])
+        texto = rel.replace("\\", "/")
+        prefijo = ""
+    except ValueError:  # otro disco
+        texto = str(ruta).replace("\\", "/")
+        prefijo = "file:///"
+    return prefijo + texto.replace("%", "%25").replace(" ", "%20").replace("#", "%23")
+
+
 def _vincular(ws, fila: int, col: int, ruta: Path, texto: str, fuente: Font = AZUL_LINK) -> None:
-    """Celda que abre el PDF con un clic (fórmula HIPERVINCULO: funciona con espacios, tildes y subcarpetas)."""
-    texto = limpiar_texto(texto)
+    """Celda con el texto de siempre que, con un clic, abre el PDF (vínculo real de Excel, no fórmula:
+    funciona aunque Excel tenga el cálculo en manual)."""
     celda = ws.cell(fila, col)
-    destino = str(ruta)
-    if len(destino) <= 250 and len(texto) <= 250:
-        celda.value = '=HYPERLINK("{}","{}")'.format(destino.replace('"', ""), texto.replace('"', '""'))
-    else:  # ruta muy larga para una fórmula: vínculo directo
-        celda.value = texto
-        celda.hyperlink = destino
-    celda.font = fuente
+    celda.value = limpiar_texto(texto)
+    if _VINCULOS_POR_HOJA[ws.title] >= MAX_VINCULOS_HOJA:
+        return
+    _VINCULOS_POR_HOJA[ws.title] += 1
+    celda.hyperlink = _destino_vinculo(ruta)
+    _estilo(celda, font=_FUENTES_VINCULO[bool(fuente.bold)])
 
 
 def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_aviso: int = 7) -> None:
@@ -105,6 +183,10 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
 
     wb = Workbook()
     wb.remove(wb.active)
+    wb._fonts = IndexedList([LETRA_CUERPO])  # letra por defecto de todo el libro: Calibri 10
+    _BASE_VINCULOS[0] = destino.parent.resolve() if destino.parent.exists() else destino.parent
+    _CACHE_ESTILOS.clear()
+    _VINCULOS_POR_HOJA.clear()
 
     # ---------------- Hoja Cotizaciones ----------------
     col_cot = [
@@ -139,7 +221,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         _vincular(ws, r, 3, carpeta / clave, Path(clave).name)
         fmt = _fmt_moneda(c.moneda)
         for col in (14, 15, 16, 17, 18):
-            ws.cell(r, col).number_format = fmt
+            _estilo(ws.cell(r, col), number_format=fmt)
         estado = ws.cell(r, 12)
         estado.fill = {"Vencida": ROJO, "Por vencer": AMARILLO, "Vigente": VERDE}.get(estado.value, PatternFill())
         if c.observaciones:
@@ -166,12 +248,10 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     ws = _hoja(wb, "Ítems", col_it, filas_it, "TablaItems")
     for r, (fmt, clave) in enumerate(zip(fmts_it, claves_it), start=2):
         _vincular(ws, r, 2, carpeta / clave, "Abrir PDF", AZUL_BOTON)
-        _vincular(ws, r, 18, carpeta / clave, Path(clave).name)
         desc = str(ws.cell(r, 10).value or "").strip() or "(sin descripción)"
         _vincular(ws, r, 10, carpeta / clave, desc)  # clic en el suministro = abre su cotización
-        ws.cell(r, 13).number_format = fmt
-        ws.cell(r, 15).number_format = fmt
-        ws.cell(r, 10).alignment = Alignment(wrap_text=True, vertical="top")
+        _estilo(ws.cell(r, 13), number_format=fmt)
+        _estilo(ws.cell(r, 15), number_format=fmt)
     if filas_it:
         ws.conditional_formatting.add(
             f"P2:P{len(filas_it) + 1}", FormulaRule(formula=['LEFT(P2,7)="Revisar"'], fill=AMARILLO)
@@ -220,7 +300,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     ws = _hoja(wb, "Comparativo", col_cmp, filas_cmp, "TablaComparativo")
     for r, (fmt, (k_min, k_max, k_ult)) in enumerate(zip(fmts_cmp, links_cmp), start=2):
         for col in (7, 10, 12, 13, 15):
-            ws.cell(r, col).number_format = fmt
+            _estilo(ws.cell(r, col), number_format=fmt)
         # clic en el proveedor = abre su cotización
         for col, k in ((8, k_min), (11, k_max), (16, k_ult)):
             _vincular(ws, r, col, carpeta / k, str(ws.cell(r, col).value or Path(k).name))
@@ -280,48 +360,79 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     for r, clave in enumerate(claves_rev, start=2):
         _vincular(ws, r, 2, carpeta / clave, Path(clave).name)
 
-    # ---------------- Hoja Resumen (primera) ----------------
+    # ---------------- Hoja Resumen (tarjetas) ----------------
     ws = wb.create_sheet("Resumen", 0)
-    ws.column_dimensions["A"].width = 38
-    ws.column_dimensions["B"].width = 26
-    ws["A1"] = "Base de cotizaciones"
-    ws["A1"].font = Font(bold=True, size=16, color=AZUL)
-    ws["A2"] = limpiar_texto(f"Carpeta: {carpeta}")
-    ws["A3"] = f"Actualizado: {datetime.now():%d-%m-%Y %H:%M}"
-    ws["A2"].font = ws["A3"].font = Font(italic=True, color="666666")
+    ws.sheet_view.showGridLines = False
+    ws.page_setup.orientation = "landscape"
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.column_dimensions["A"].width = 3
+    for col in "BCDEFGHI":
+        ws.column_dimensions[col].width = 17
+    ws["B2"] = "Base de cotizaciones"
+    ws["B2"].font = Font(name=FUENTE_XL, bold=True, size=22, color=VERDE_OSC)
+    ws["B3"] = limpiar_texto(f"por Carlos  ·  actualizado {datetime.now():%d-%m-%Y %H:%M}  ·  {carpeta}")
+    ws["B3"].font = Font(name=FUENTE_XL, size=10, color=GRIS_TXT)
     estados = [f[11] for f in filas_cot]
     total_clp = sum(c.total or 0 for _, c, _ in cotizaciones if c.moneda == "CLP")
-    indicadores = [
-        ("Cotizaciones leídas", len(cotizaciones), FMT_ENTERO),
-        ("Proveedores distintos", len(prov), FMT_ENTERO),
-        ("Líneas de detalle (ítems)", len(filas_it), FMT_ENTERO),
-        ("Productos/servicios comparables (2+ cotizaciones)", sum(1 for f in filas_cmp if f[4] > 1), FMT_ENTERO),
-        ("Monto total cotizado (CLP, con IVA)", total_clp, FMT_ENTERO),
-        ("Cotizaciones vigentes", estados.count("Vigente"), FMT_ENTERO),
-        ("Cotizaciones por vencer", estados.count("Por vencer"), FMT_ENTERO),
-        ("Cotizaciones vencidas", estados.count("Vencida"), FMT_ENTERO),
-        ("Observaciones por revisar", len(filas_rev), FMT_ENTERO),
+    tarjetas = [
+        ("Cotizaciones", len(cotizaciones), FMT_ENTERO, VERDE_OSC),
+        ("Proveedores", len(prov), FMT_ENTERO, VERDE_OSC),
+        ("Líneas de precio", len(filas_it), FMT_ENTERO, VERDE_OSC),
+        ("Monto cotizado (CLP)", total_clp, '"$" #,##0', VERDE_OSC),
+        ("Vigentes", estados.count("Vigente"), FMT_ENTERO, "16A34A"),
+        ("Por vencer", estados.count("Por vencer"), FMT_ENTERO, "D97706"),
+        ("Vencidas", estados.count("Vencida"), FMT_ENTERO, "DC2626"),
+        ("Por revisar", len(filas_rev), FMT_ENTERO, "DC2626"),
     ]
-    borde = Border(bottom=Side(style="thin", color="DDDDDD"))
-    for i, (nombre, valor, fmt) in enumerate(indicadores, start=5):
-        ws.cell(i, 1, nombre).border = borde
-        c = ws.cell(i, 2, valor)
-        c.number_format = fmt
-        c.font = Font(bold=True, size=12)
-        c.border = borde
+    fondo = PatternFill("solid", fgColor=GRIS_FONDO)
+    linea = Side(style="thin", color=BORDE_SUAVE)
+    for i, (titulo, valor, fmt, color) in enumerate(tarjetas):
+        fila = 5 + (i // 4) * 4
+        c1 = 2 + (i % 4) * 2  # cada tarjeta ocupa 2 columnas
+        ws.merge_cells(start_row=fila, start_column=c1, end_row=fila, end_column=c1 + 1)
+        ws.merge_cells(start_row=fila + 1, start_column=c1, end_row=fila + 1, end_column=c1 + 1)
+        t = ws.cell(fila, c1, titulo)
+        t.font = Font(name=FUENTE_XL, size=10, bold=True, color=GRIS_TXT)
+        v = ws.cell(fila + 1, c1, valor)
+        v.font = Font(name=FUENTE_XL, size=20, bold=True, color=color)
+        v.number_format = fmt
+        for r in (fila, fila + 1):
+            for c in (c1, c1 + 1):
+                celda = ws.cell(r, c)
+                celda.fill = fondo
+                celda.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+                celda.border = Border(top=linea if r == fila else None, bottom=linea if r == fila + 1 else None,
+                                      left=linea if c == c1 else None, right=linea if c == c1 + 1 else None)
+        ws.row_dimensions[fila].height = 20
+        ws.row_dimensions[fila + 1].height = 34
+
     por_cat: dict[str, int] = defaultdict(int)
     for _, c, _ in cotizaciones:
         for cat in c.categorias:
             por_cat[cat] += 1
+    fila = 14
     if por_cat:
-        ws.cell(17, 1, "Cotizaciones por categoría").font = Font(bold=True, size=12, color=AZUL)
-        for i, (cat, n) in enumerate(sorted(por_cat.items(), key=lambda t: -t[1]), start=18):
-            ws.cell(i, 1, limpiar_texto(cat)).border = borde
-            celda = ws.cell(i, 2, n)
-            celda.font = Font(bold=True)
-            celda.border = borde
-    ws.cell(15, 1, "Hojas: Cotizaciones (1 fila por PDF) · Ítems (1 fila por línea) · Comparativo (precios por producto) "
-                   "· Proveedores · Revisar (lo que conviene verificar a mano)").font = Font(color="666666")
+        ws.cell(fila, 2, "Cotizaciones por categoría").font = Font(name=FUENTE_XL, bold=True, size=13, color=VERDE_OSC)
+        for i, (cat, n) in enumerate(sorted(por_cat.items(), key=lambda t: -t[1]), start=fila + 1):
+            ws.merge_cells(start_row=i, start_column=2, end_row=i, end_column=4)
+            ws.cell(i, 2, limpiar_texto(cat)).font = Font(name=FUENTE_XL, size=11)
+            celda = ws.cell(i, 5, n)
+            celda.font = Font(name=FUENTE_XL, size=11, bold=True)
+            for c in range(2, 6):
+                ws.cell(i, c).border = Border(bottom=linea)
+        fila = fila + len(por_cat) + 2
+    ws.cell(fila, 2, "Hojas").font = Font(name=FUENTE_XL, bold=True, size=13, color=VERDE_OSC)
+    guia = [("Precios", "una fila por suministro: empresa, fecha, descripción, cantidad y precio (clic = abre el PDF)"),
+            ("Cotizaciones", "una fila por PDF, con condiciones, totales y vigencia"),
+            ("Ítems", "todas las líneas con todos sus datos"),
+            ("Proveedores", "contacto y montos por proveedor"),
+            ("Revisar", "lo que conviene verificar a mano"),
+            ("Comparativo", "el mismo producto en distintas cotizaciones")]
+    for i, (h, d) in enumerate(guia, start=fila + 1):
+        ws.cell(i, 2, h).font = Font(name=FUENTE_XL, bold=True, size=10)
+        ws.cell(i, 3, d).font = Font(name=FUENTE_XL, size=10, color=GRIS_TXT)
 
     # ---------------- Hoja Precios (la primera: lo esencial de cada línea) ----------------
     col_pre = [
@@ -338,14 +449,21 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     ws = _hoja(wb, "Precios", col_pre, filas_pre, "TablaPrecios")
     wb.move_sheet(ws, offset=-(len(wb.sheetnames) - 1))  # primera hoja
     for r, (clave, fmt) in enumerate(extra_pre, start=2):
-        ws.cell(r, 6).number_format = fmt
-        ws.cell(r, 7).number_format = fmt
+        _estilo(ws.cell(r, 6), number_format=fmt)
+        _estilo(ws.cell(r, 7), number_format=fmt)
         # clic en el suministro (descripción) = abre su cotización
         desc = str(ws.cell(r, 3).value or "").strip() or "(sin descripción)"
         _vincular(ws, r, 3, carpeta / clave, desc)
-        ws.cell(r, 3).alignment = Alignment(wrap_text=True, vertical="top")
         _vincular(ws, r, 10, carpeta / clave, "Abrir PDF", AZUL_BOTON)
     ws.freeze_panes = "A2"
+
+    # orden de las hojas y color de cada pestaña
+    orden = ["Precios", "Resumen", "Cotizaciones", "Ítems", "Proveedores", "Revisar", "Comparativo"]
+    colores = {"Precios": "16A34A", "Resumen": "0B6E3A", "Cotizaciones": "E8700A", "Ítems": "0E7490",
+               "Proveedores": "6B7280", "Revisar": "DC2626", "Comparativo": "9CA3AF"}
+    wb._sheets.sort(key=lambda h: orden.index(h.title) if h.title in orden else len(orden))
+    for h in wb.worksheets:
+        h.sheet_properties.tabColor = colores.get(h.title, "9CA3AF")
     wb.active = 0
 
     _guardar_atomico(wb, destino)
