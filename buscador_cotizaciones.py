@@ -53,6 +53,7 @@ CONFIG_DEFECTO = {
     "ocr": True,
     "quitar_borrados": True,
     "procesos": 0,
+    "max_paginas_tablas": 10,
     "aviso_ventana": True,
     "aviso_sonido": True,
     "avisar_desde": 5,
@@ -217,10 +218,13 @@ def _prioridad_baja() -> None:
 
 def _leer_pdf(ruta: str, opciones: dict) -> dict:
     """Lee un PDF (se ejecuta en un proceso aparte para aprovechar todos los núcleos)."""
+    inicio = time.monotonic()
     try:
-        return extraer_cotizacion(Path(ruta), **opciones).to_dict()
+        datos = extraer_cotizacion(Path(ruta), **opciones).to_dict()
     except Exception as e:  # PDF dañado, protegido, etc.
-        return {"archivo": ruta, "metodo": "error", "observaciones": [f"No se pudo leer el PDF: {e}"], "items": []}
+        datos = {"archivo": ruta, "metodo": "error", "observaciones": [f"No se pudo leer el PDF: {e}"], "items": []}
+    datos["_segundos"] = round(time.monotonic() - inicio, 1)
+    return datos
 
 
 def _resumen(datos: dict) -> str:
@@ -324,7 +328,8 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
     if pendientes:
         log.info("Cotizaciones por leer: %d", len(pendientes))
         opciones = {"mis_ruts": set(cfg["mis_ruts"]), "formato": cfg["formato_numeros"],
-                    "dias_validez": int(cfg["dias_validez_por_defecto"]), "usar_ocr": bool(cfg["ocr"])}
+                    "dias_validez": int(cfg["dias_validez_por_defecto"]), "usar_ocr": bool(cfg["ocr"]),
+                    "max_paginas_tablas": int(cfg["max_paginas_tablas"])}
         nucleos = int(cfg.get("procesos") or 0) or (os.cpu_count() or 2)  # todos los núcleos
         nucleos = min(nucleos, len(pendientes))
         log.info("Usando %d núcleo(s) del procesador.", nucleos)
@@ -337,6 +342,9 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
             por_hash[h] = clave
             detalle = f"Error en {clave}: {datos['observaciones'][0]}" if datos.get("metodo") == "error" \
                 else f"{clave}  ->  {_resumen(datos)}"
+            seg_pdf = datos.pop("_segundos", 0)
+            if seg_pdf >= 20:
+                detalle += f"   (lento: {seg_pdf:.0f} s, {datos.get('paginas', '?')} páginas)"
             log.info(detalle, extra={"solo_archivo": barra.activa})
             barra.avanzar(clave)
             nonlocal ultimo_guardado

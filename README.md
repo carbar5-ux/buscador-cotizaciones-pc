@@ -88,6 +88,7 @@ Si el repositorio es **público**, no hace falta clave.
 | `actualizar_automatico` | Buscar e instalar versiones nuevas solo. |
 | `horas_entre_actualizaciones` | Cada cuánto revisa mientras vigila. |
 | `token_github` | Clave de solo lectura, solo si el repositorio es privado. |
+| `max_paginas_tablas` | El lector de tablas revisa solo las primeras N páginas de cada PDF (10); el texto se lee completo. Acelera mucho los catálogos. |
 | `procesos` | Cuántos PDF leer a la vez (0 = todos los núcleos del procesador). |
 
 ## PDF escaneados (opcional)
