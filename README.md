@@ -2,7 +2,7 @@
 
 Creado por **Carlos**. Manual de uso: [`Manual_de_uso.pdf`](Manual_de_uso.pdf).
 
-Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de tu computador (y sus subcarpetas), lee su contenido y arma un **Excel base** con toda la información. Si lo dejas en **modo vigilancia**, cada vez que guardas una cotización nueva en la carpeta el Excel se actualiza solo.
+Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de tu computador (y sus subcarpetas), lee su contenido y arma un **Excel base** con toda la información. Se usa desde una **ventana de Windows** con barra de progreso en colores, contadores y botones para abrir el Excel, la carpeta y el manual. Si lo dejas en **modo vigilancia**, cada vez que guardas una cotización nueva en la carpeta el Excel se actualiza solo.
 
 ## Qué saca de cada cotización
 
@@ -37,7 +37,8 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 | Archivo | Qué hace |
 | --- | --- |
 | `procesar.bat` | Lee la carpeta una vez y actualiza el Excel. |
-| `vigilar.bat` | Queda abierto revisando la carpeta cada 10 segundos y actualiza el Excel cuando llegan, cambian o se borran cotizaciones. |
+| `vigilar.bat` | Abre la **ventana del buscador** (lo abre el ícono verde): lee las cotizaciones y queda vigilando la carpeta. |
+| `vigilar_consola.bat` | Lo mismo, pero en texto (consola), por si la ventana no abre. |
 | `iniciar_con_windows.bat` | Hace que la vigilancia parta sola y en segundo plano cada vez que enciendes el PC. |
 | `abrir_excel.bat` | Abre el Excel base directamente. |
 | `actualizar.bat` | Busca e instala la última versión ahora. |

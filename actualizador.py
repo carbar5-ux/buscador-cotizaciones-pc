@@ -116,10 +116,16 @@ def instalar(token: str) -> bool:
 
 
 def reiniciar() -> None:
-    """Vuelve a abrir el programa (con la versión nueva) en la misma ventana y cierra este."""
-    script = str(BASE / "buscador_cotizaciones.py")
-    subprocess.Popen([sys.executable, script, *sys.argv[1:]], cwd=str(BASE))
-    sys.exit(0)
+    """Vuelve a abrir el programa (con la versión nueva) y cierra este.
+
+    Sirve tanto para la consola como para la ventana: relanza el mismo script con
+    los mismos argumentos y termina el proceso actual de inmediato.
+    """
+    script = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0].endswith(".py") \
+        else BASE / "buscador_cotizaciones.py"
+    subprocess.Popen([sys.executable, str(script), *sys.argv[1:]], cwd=str(BASE))
+    logging.shutdown()
+    os._exit(0)
 
 
 # Archivos que una versión anterior del actualizador no sabía descargar: si faltan, se traen.
