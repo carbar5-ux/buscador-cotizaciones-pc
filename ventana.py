@@ -6,9 +6,11 @@ procesos aparte); esta ventana solo muestra el avance, por eso no la hace más l
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
 import queue
+import re
 import socket
 import subprocess
 import sys
@@ -23,7 +25,10 @@ sys.path.insert(0, str(BASE))
 
 import consola  # noqa: E402
 from actualizador import reiniciar, version_local  # noqa: E402
+from agrupador import (asegurar_sinonimos, calza_preparado, preparar, preparar_consulta, sinonimos,  # noqa: E402
+                       unidad_normal)
 from clasificador import CARPETA_CLASIFICADAS, asegurar_archivo  # noqa: E402
+from excel_writer import limpiar_texto  # noqa: E402
 from buscador_cotizaciones import candado_instancia, guardar_carpeta, leer_config, main  # noqa: E402
 from consola import _duracion  # noqa: E402
 
@@ -86,6 +91,8 @@ class Ventana:
         self.candado = candado
         self.cola: queue.Queue = queue.Queue()
         self.detener = threading.Event()
+        self.compartido: dict = {}  # el motor deja aquí los datos (para el buscador de precios)
+        self._indice: tuple[int, list] | None = None
         self.leidas_sesion = 0
         self.ultimo_avance = 0.0
 
@@ -153,6 +160,19 @@ class Ventana:
                  font=(FUENTE, 18, "bold")).pack(anchor="w")
         tk.Label(tit, text=f"por Carlos  ·  versión {version_local()}", bg=VERDE_OSC, fg="#CDEBD8",
                  font=(FUENTE, 10)).pack(anchor="w")
+        busca = tk.Frame(enc, bg=VERDE_OSC)
+        busca.pack(side="right", padx=18)
+        tk.Label(busca, text="Buscar precio", bg=VERDE_OSC, fg="white", font=(FUENTE, 10, "bold")).pack(anchor="w")
+        fila_b = tk.Frame(busca, bg=VERDE_OSC)
+        fila_b.pack()
+        self.txt_buscar = tk.Entry(fila_b, font=(FUENTE, 12), width=24, relief="flat")
+        self.txt_buscar.pack(side="left", ipady=5)
+        self.txt_buscar.bind("<Return>", lambda e: self.buscar_precio())
+        tk.Button(fila_b, text="Buscar", command=self.buscar_precio, bg=NARANJO, fg="white", relief="flat",
+                  font=(FUENTE, 10, "bold"), cursor="hand2", activebackground=NARANJO).pack(side="left", ipady=3)
+        tk.Button(fila_b, text="Planilla", command=self.abrir_planilla, bg="white", fg=VERDE_OSC, relief="flat",
+                  font=(FUENTE, 10, "bold"), cursor="hand2").pack(side="left", padx=(8, 0), ipady=3)
+        r.bind_all("<Control-f>", lambda e: self.txt_buscar.focus_set())
 
         cuerpo = tk.Frame(r, bg=FONDO)
         cuerpo.pack(fill="both", expand=True, padx=18, pady=14)
@@ -261,7 +281,7 @@ class Ventana:
 
     def _motor(self) -> None:
         try:
-            main(["--vigilar"], detener=self.detener, ventana=True)
+            main(["--vigilar"], detener=self.detener, ventana=True, compartido=self.compartido)
         except SystemExit:
             pass
         except Exception as e:
@@ -368,6 +388,47 @@ class Ventana:
         if self.excel:
             abrir(self.excel)
 
+    # ---------------- buscador de precios ----------------
+    def _indice_precios(self) -> list:
+        """Todas las líneas con precio, preparadas una vez (se rehace si cambian los datos)."""
+        db = self.compartido.get("db")
+        if not db:
+            return []
+        try:
+            registros = list(db.items())
+        except RuntimeError:  # el motor está agregando cotizaciones justo ahora
+            registros = list(db.items())
+        firma = (len(registros), sum(len(r.get("datos", {}).get("items", [])) for _, r in registros))
+        if self._indice and self._indice[0] == firma:
+            return self._indice[1]
+        sin = sinonimos()
+        filas = []
+        for clave, reg in registros:
+            d = reg.get("datos", {})
+            for it in d.get("items", []):
+                pu = it.get("precio_unitario")
+                if pu is None or not it.get("descripcion"):
+                    continue
+                filas.append((preparar(it["descripcion"], it.get("codigo", ""), sin), it, d, clave))
+        self._indice = (firma, filas)
+        return filas
+
+    def abrir_planilla(self) -> None:
+        if not self.compartido.get("db"):
+            messagebox.showinfo("Planilla", "Todavía se están cargando las cotizaciones. Intenta en unos segundos.")
+            return
+        Planilla(self)
+
+    def buscar_precio(self) -> None:
+        consulta = self.txt_buscar.get().strip()
+        if not consulta:
+            self.txt_buscar.focus_set()
+            return
+        if not self.compartido.get("db"):
+            messagebox.showinfo("Buscar precio", "Todavía se están cargando las cotizaciones. Intenta en unos segundos.")
+            return
+        Planilla(self, consulta)
+
     def editar_categorias(self) -> None:
         """Abre categorias.txt en el Bloc de notas; al guardarlo, el programa reclasifica solo."""
         ruta = asegurar_archivo()
@@ -417,6 +478,276 @@ class Ventana:
         self.raiz.destroy()
         logging.shutdown()
         os._exit(0)
+
+
+def _dinero(v, moneda: str) -> str:
+    if v is None:
+        return ""
+    if moneda in ("CLP", ""):
+        return "$ " + f"{v:,.0f}".replace(",", ".")
+    return f"{moneda} " + f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _fecha_txt(iso: str) -> str:
+    return f"{iso[8:10]}-{iso[5:7]}-{iso[:4]}" if iso and len(iso) >= 10 else ""
+
+
+class Planilla:
+    """Todas las líneas de todas las cotizaciones, con filtros, como una planilla dentro del programa.
+
+    Doble clic en una fila abre la cotización. Clic en un título de columna ordena por ella.
+    """
+
+    COLUMNAS = (("descripcion", "Descripción", 320, "w"), ("precio", "Precio unitario", 115, "e"),
+                ("cantidad", "Cantidad", 75, "e"), ("unidad", "Unidad", 60, "center"), ("total", "Total", 115, "e"),
+                ("proveedor", "Empresa", 190, "w"), ("fecha", "Fecha", 95, "center"), ("numero", "N° cot.", 80, "w"),
+                ("categoria", "Categoría", 130, "w"))
+    MAXIMO = 3000  # filas dibujadas a la vez (con más, la tabla se pone lenta: se pide filtrar)
+    TODAS = "(todas)"
+
+    def __init__(self, app: "Ventana", texto: str = ""):
+        self.app = app
+        self.orden = ("precio", False) if texto else ("fecha", True)
+        self.top = tk.Toplevel(app.raiz)
+        self.top.title("Planilla de cotizaciones — Carlos")
+        self.top.configure(bg=FONDO)
+        try:
+            self.top.iconbitmap(str(BASE / "icono_cotizaciones.ico"))
+        except Exception:
+            pass
+        filas_idx = app._indice_precios()
+
+        # ---- filtros ----
+        f = tk.Frame(self.top, bg=FONDO)
+        f.pack(fill="x", padx=14, pady=(8, 2))
+
+        fb = tk.Frame(self.top, bg=FONDO)  # buscador en su propia línea (siempre visible)
+        fb.pack(fill="x", padx=14, pady=(12, 0), before=f)
+        tk.Label(fb, text="Buscar suministro (descripción o código):", bg=FONDO, fg=TEXTO,
+                 font=(FUENTE, 11, "bold")).pack(side="left")
+        self.txt = tk.Entry(fb, font=(FUENTE, 13), width=40)
+        self.txt.insert(0, texto)
+        self.txt.pack(side="left", padx=8, ipady=4, fill="x", expand=True)
+        self.txt.bind("<KeyRelease>", lambda e: self._programar())
+        self.txt.focus_set()
+        empresas = sorted({d.get("proveedor", "") for _, _, d, _ in filas_idx if d.get("proveedor")}, key=str.lower)
+        cats = sorted({c.strip() for _, it, _, _ in filas_idx for c in (it.get("categoria") or "").split(",") if c.strip()})
+        monedas = sorted({d.get("moneda", "") for _, _, d, _ in filas_idx if d.get("moneda")})
+        self.cb_empresa = self._combo(f, "Empresa", [self.TODAS] + empresas, 0, 26)
+        self.cb_cat = self._combo(f, "Categoría", [self.TODAS] + cats + ["(sin categoría)"], 1, 18)
+        self.cb_moneda = self._combo(f, "Moneda", [self.TODAS] + monedas, 2, 8)
+        etiqueta_d = tk.Label(f, text="Fecha desde / hasta (dd-mm-aaaa)", bg=FONDO, fg=GRIS, font=(FUENTE, 9, "bold"))
+        etiqueta_d.grid(row=0, column=3, columnspan=2, sticky="w")
+        self.txt_desde = tk.Entry(f, font=(FUENTE, 11), width=11)
+        self.txt_hasta = tk.Entry(f, font=(FUENTE, 11), width=11)
+        self.txt_desde.grid(row=1, column=3, padx=(0, 4), ipady=3)
+        self.txt_hasta.grid(row=1, column=4, padx=(0, 10), ipady=3)
+        for e in (self.txt_desde, self.txt_hasta):
+            e.bind("<KeyRelease>", lambda ev: self._programar())
+        ttk.Button(f, text="Limpiar filtros", style="Gris.TButton", command=self.limpiar).grid(row=1, column=5, padx=4)
+        ttk.Button(f, text="Exportar a Excel", style="Verde.TButton", command=self.exportar).grid(row=1, column=6)
+
+        self.lbl_resumen = tk.Label(self.top, text="", bg=FONDO, fg=TEXTO, font=(FUENTE, 11, "bold"), anchor="w",
+                                    justify="left", wraplength=1150)
+        self.lbl_resumen.pack(fill="x", padx=14, pady=(8, 0))
+        tk.Label(self.top, text="Doble clic en una fila: abre la cotización  ·  clic en un título: ordena por esa columna",
+                 bg=FONDO, fg=GRIS, font=(FUENTE, 9), anchor="w").pack(fill="x", padx=14)
+
+        # ---- tabla ----
+        marco = tk.Frame(self.top, bg=FONDO)
+        marco.pack(fill="both", expand=True, padx=14, pady=8)
+        self.tabla = ttk.Treeview(marco, columns=[c[0] for c in self.COLUMNAS], show="headings")
+        for clave, titulo, ancho, alin in self.COLUMNAS:
+            self.tabla.heading(clave, text=titulo, command=lambda k=clave: self.ordenar(k))
+            self.tabla.column(clave, width=ancho, anchor=alin, stretch=clave == "descripcion")
+        sy = ttk.Scrollbar(marco, orient="vertical", command=self.tabla.yview)
+        sx = ttk.Scrollbar(marco, orient="horizontal", command=self.tabla.xview)
+        self.tabla.configure(yscrollcommand=sy.set, xscrollcommand=sx.set)
+        self.tabla.grid(row=0, column=0, sticky="nsew")
+        sy.grid(row=0, column=1, sticky="ns")
+        sx.grid(row=1, column=0, sticky="ew")
+        marco.rowconfigure(0, weight=1)
+        marco.columnconfigure(0, weight=1)
+        self.tabla.tag_configure("barato", background="#DCFCE7")
+        self.tabla.tag_configure("par", background="#F9FAFB")
+        self.tabla.bind("<Double-1>", self.abrir_pdf)
+        st = ttk.Style(self.top)
+        st.configure("Treeview", font=(FUENTE, 10), rowheight=26)
+        st.configure("Treeview.Heading", font=(FUENTE, 10, "bold"))
+
+        ancho = min(1200, self.top.winfo_screenwidth() - 40)
+        alto = min(720, self.top.winfo_screenheight() - 80)
+        self.top.geometry(f"{ancho}x{alto}+{max(0, (self.top.winfo_screenwidth() - ancho) // 2)}+20")
+        self.claves: dict[str, str] = {}
+        self.visibles: list = []
+        self._tarea = None
+        self.aplicar()
+
+    def _combo(self, padre, titulo, valores, col, ancho):
+        tk.Label(padre, text=titulo, bg=FONDO, fg=GRIS, font=(FUENTE, 9, "bold")).grid(row=0, column=col, sticky="w")
+        cb = ttk.Combobox(padre, values=valores, state="readonly", width=ancho, font=(FUENTE, 10))
+        cb.set(self.TODAS)
+        cb.grid(row=1, column=col, padx=(0, 10), ipady=2)
+        cb.bind("<<ComboboxSelected>>", lambda e: self.aplicar())
+        return cb
+
+    def _programar(self) -> None:
+        """Filtra medio segundo después de dejar de escribir (no en cada tecla)."""
+        if self._tarea:
+            self.top.after_cancel(self._tarea)
+        self._tarea = self.top.after(450, self.aplicar)
+
+    @staticmethod
+    def _iso(texto: str) -> str:
+        m = re.fullmatch(r"\s*(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\s*", texto or "")
+        if not m:
+            return ""
+        d, mes, a = m.groups()
+        a = ("20" + a) if len(a) == 2 else a
+        return f"{a}-{int(mes):02d}-{int(d):02d}"
+
+    def limpiar(self) -> None:
+        for e in (self.txt, self.txt_desde, self.txt_hasta):
+            e.delete(0, "end")
+        for cb in (self.cb_empresa, self.cb_cat, self.cb_moneda):
+            cb.set(self.TODAS)
+        self.orden = ("fecha", True)
+        self.aplicar()
+
+    def ordenar(self, columna: str) -> None:
+        col, rev = self.orden
+        self.orden = (columna, not rev if col == columna else columna in ("fecha", "total", "precio", "cantidad"))
+        self.aplicar()
+
+    def aplicar(self) -> None:
+        self._tarea = None
+        texto = self.txt.get().strip()
+        q = preparar_consulta(texto) if texto else None
+        empresa, cat, moneda = self.cb_empresa.get(), self.cb_cat.get(), self.cb_moneda.get()
+        desde, hasta = self._iso(self.txt_desde.get()), self._iso(self.txt_hasta.get())
+        filas = []
+        for prep, it, d, clave in self.app._indice_precios():
+            if q and not calza_preparado(q, prep):
+                continue
+            if empresa != self.TODAS and d.get("proveedor") != empresa:
+                continue
+            if moneda != self.TODAS and d.get("moneda") != moneda:
+                continue
+            if cat != self.TODAS:
+                cats_it = it.get("categoria") or ""
+                if (cat == "(sin categoría)" and cats_it) or (cat != "(sin categoría)" and cat not in cats_it):
+                    continue
+            f = d.get("fecha") or ""
+            if (desde and f < desde) or (hasta and (not f or f > hasta)):
+                continue
+            filas.append((it, d, clave))
+
+        col, rev = self.orden
+        claves_orden = {
+            "descripcion": lambda t: (t[0].get("descripcion") or "").lower(),
+            "precio": lambda t: t[0].get("precio_unitario") or 0,
+            "cantidad": lambda t: t[0].get("cantidad") or 0,
+            "unidad": lambda t: (t[0].get("unidad") or "").lower(),
+            "total": lambda t: t[0].get("total") or 0,
+            "proveedor": lambda t: (t[1].get("proveedor") or "").lower(),
+            "fecha": lambda t: t[1].get("fecha") or "",
+            "numero": lambda t: str(t[1].get("numero") or ""),
+            "categoria": lambda t: t[0].get("categoria") or "",
+        }
+        filas.sort(key=claves_orden[col], reverse=rev)
+        for clave_c, titulo, *_ in self.COLUMNAS:
+            flecha = (" ▼" if rev else " ▲") if clave_c == col else ""
+            self.tabla.heading(clave_c, text=titulo + flecha)
+
+        self.tabla.delete(*self.tabla.get_children())
+        self.claves.clear()
+        self.visibles = filas
+        minimo = min((t[0]["precio_unitario"] for t in filas), default=None) if q else None
+        for n, (it, d, clave) in enumerate(filas[: self.MAXIMO]):
+            mon = d.get("moneda", "")
+            tag = ("barato",) if minimo is not None and it["precio_unitario"] == minimo else (("par",) if n % 2 else ())
+            iid = self.tabla.insert("", "end", tags=tag, values=(
+                it.get("descripcion", ""), _dinero(it.get("precio_unitario"), mon),
+                f"{it['cantidad']:g}" if it.get("cantidad") is not None else "", it.get("unidad", ""),
+                _dinero(it.get("total"), mon), d.get("proveedor", ""), _fecha_txt(d.get("fecha", "")),
+                d.get("numero", ""), it.get("categoria", "")))
+            self.claves[iid] = clave
+        self._resumen(filas, bool(q))
+
+    def _resumen(self, filas: list, con_busqueda: bool) -> None:
+        if not filas:
+            self.lbl_resumen.config(text="No hay líneas con esos filtros.", fg=ROJO)
+            return
+        n_cot = len({t[2] for t in filas})
+        totales: dict[str, float] = {}
+        for it, d, _ in filas:
+            if it.get("total") is not None:
+                totales[d.get("moneda", "")] = totales.get(d.get("moneda", ""), 0) + it["total"]
+        partes = [f"{len(filas):,} líneas de {n_cot:,} cotizaciones".replace(",", ".")]
+        partes.append("suma de totales " + "  +  ".join(_dinero(v, m) for m, v in totales.items()))
+        if len(filas) > self.MAXIMO:
+            partes.append(f"se muestran las primeras {self.MAXIMO:,}: usa los filtros para acotar".replace(",", "."))
+        texto = "   ·   ".join(partes)
+        if con_busqueda:
+            # precio mínimo / último / promedio del grupo más común (misma moneda y unidad)
+            grupos: dict[tuple, list] = {}
+            for t in filas:
+                grupos.setdefault((t[1].get("moneda", ""), unidad_normal(t[0].get("unidad", ""))), []).append(t)
+            (mon, uni), g = max(grupos.items(), key=lambda kv: len(kv[1]))
+            precios = [t[0]["precio_unitario"] for t in g]
+            barato = min(g, key=lambda t: t[0]["precio_unitario"])
+            ultimo = max(g, key=lambda t: t[1].get("fecha") or "")
+            texto += (f"\nPor {uni or 'unidad'} en {mon}:   mínimo {_dinero(min(precios), mon)} "
+                      f"({barato[1].get('proveedor', '')[:30]}, {_fecha_txt(barato[1].get('fecha', ''))})   ·   "
+                      f"último {_dinero(ultimo[0]['precio_unitario'], mon)} ({ultimo[1].get('proveedor', '')[:30]}, "
+                      f"{_fecha_txt(ultimo[1].get('fecha', ''))})   ·   promedio {_dinero(sum(precios) / len(precios), mon)}")
+        self.lbl_resumen.config(text=texto, fg=TEXTO)
+
+    def abrir_pdf(self, _evento=None) -> None:
+        sel = self.tabla.selection()
+        carpeta = self.app.compartido.get("carpeta")
+        if sel and sel[0] in self.claves and carpeta:
+            abrir(Path(carpeta) / self.claves[sel[0]])
+
+    def exportar(self) -> None:
+        """Guarda en un Excel solo las líneas filtradas."""
+        if not self.visibles:
+            messagebox.showinfo("Exportar", "No hay líneas para exportar.", parent=self.top)
+            return
+        ruta = filedialog.asksaveasfilename(parent=self.top, defaultextension=".xlsx", initialfile="Precios filtrados.xlsx",
+                                            filetypes=[("Excel", "*.xlsx")], title="Guardar líneas filtradas")
+        if not ruta:
+            return
+        from openpyxl import Workbook
+        from openpyxl.worksheet.table import Table, TableStyleInfo
+
+        carpeta = Path(self.app.compartido.get("carpeta", "."))
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Precios"
+        ws.append(["Descripción", "Precio unitario", "Cantidad", "Unidad", "Total", "Moneda", "Empresa", "Fecha",
+                   "N° cotización", "Categoría", "Archivo"])
+        for it, d, clave in self.visibles:
+            f = d.get("fecha") or ""
+            ws.append([limpiar_texto(v) for v in [it.get("descripcion"), it.get("precio_unitario"), it.get("cantidad"), it.get("unidad"),
+                       it.get("total"), d.get("moneda"), d.get("proveedor"),
+                       datetime.date.fromisoformat(f) if f else None, d.get("numero"), it.get("categoria"),
+                       str(carpeta / clave)]])
+        for col, ancho in zip("ABCDEFGHIJK", (60, 15, 10, 8, 15, 8, 30, 12, 14, 20, 50)):
+            ws.column_dimensions[col].width = ancho
+        for fila in ws.iter_rows(min_row=2):
+            fila[1].number_format = fila[4].number_format = "#,##0.##"
+            fila[7].number_format = "dd-mm-yyyy"
+        tabla = Table(displayName="Filtrados", ref=f"A1:K{len(self.visibles) + 1}")
+        tabla.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+        ws.add_table(tabla)
+        ws.freeze_panes = "A2"
+        try:
+            wb.save(ruta)
+        except PermissionError:
+            messagebox.showerror("Exportar", "No se pudo guardar: ¿el archivo está abierto en Excel?", parent=self.top)
+            return
+        abrir(Path(ruta))
 
 
 def iniciar() -> None:
