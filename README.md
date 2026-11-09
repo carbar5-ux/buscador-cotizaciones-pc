@@ -57,6 +57,23 @@ El Excel queda en tu carpeta de cotizaciones como `Base_Cotizaciones.xlsx`. Junt
 
 > Si el Excel está abierto cuando llega una cotización, el programa espera: al cerrarlo se actualiza en la siguiente pasada. El Excel se regenera completo cada vez, así que **no escribas a mano en él** (haz tus análisis en otro libro que lo consulte).
 
+## Clasificar por categoría (Cables, Alumbrado, ...)
+
+El programa copia cada cotización a carpetas por categoría: `<carpeta de cotizaciones>\Clasificadas\Cables\`, `...\Alumbrado\`, etc. Los originales no se mueven y el buscador no vuelve a leer las copias. Una cotización con ítems de varias categorías se copia a cada una.
+
+Las categorías se definen en `categorias.txt` (botón **Categorías** de la ventana), una por línea:
+
+```
+Cables: cable, conductor, alambre, thhn, awg
+Alumbrado: luminaria, foco, led, reflector, proyector
+```
+
+Una cotización entra a una categoría si alguna de sus líneas (descripción o código) o el nombre del archivo contiene una de esas palabras (sin importar mayúsculas ni tildes). Al guardar el archivo, el programa reclasifica todo solo. En el Excel, la columna **Categorías** (Cotizaciones) y **Categoría** (Ítems) permiten filtrar, y el Resumen cuenta cotizaciones por categoría. El botón **Clasificadas** abre la carpeta de copias.
+
+## Abrir el PDF desde el Excel
+
+En las hojas **Cotizaciones** e **Ítems**, la columna **PDF** tiene "Abrir PDF": un clic abre la cotización. También abren el PDF el nombre del archivo, los proveedores del **Comparativo** y los archivos de **Revisar**.
+
 ## Actualización automática
 
 Al abrirse, y cada 6 horas mientras vigila, el programa revisa si hay una versión nueva en GitHub (compara el archivo `VERSION`). Si la hay, descarga solo los archivos del programa, instala las librerías nuevas si hacen falta y se reinicia solo. **Nunca toca `config.toml`, el Excel ni los datos.** Sin internet, sigue funcionando normal. Para buscar una actualización a mano: `actualizar.bat`.
@@ -89,6 +106,7 @@ Si el repositorio es **público**, no hace falta clave.
 | `horas_entre_actualizaciones` | Cada cuánto revisa mientras vigila. |
 | `token_github` | Clave de solo lectura, solo si el repositorio es privado. |
 | `max_paginas_tablas` | El lector de tablas revisa solo las primeras N páginas de cada PDF (10); el texto se lee completo. Acelera mucho los catálogos. |
+| `clasificar` | Copiar las cotizaciones a carpetas por categoría (ver `categorias.txt`). |
 | `procesos` | Cuántos PDF leer a la vez (0 = todos los núcleos del procesador). |
 
 ## PDF escaneados (opcional)

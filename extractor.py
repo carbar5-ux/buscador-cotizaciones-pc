@@ -48,6 +48,7 @@ class Item:
     total: float | None = None
     pagina: int = 0
     control: str = ""
+    categoria: str = ""
 
 
 @dataclass
@@ -74,6 +75,7 @@ class Cotizacion:
     paginas: int = 0
     metodo: str = ""
     observaciones: list[str] = field(default_factory=list)
+    categorias: list[str] = field(default_factory=list)
     items: list[Item] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -82,7 +84,7 @@ class Cotizacion:
     @staticmethod
     def from_dict(d: dict) -> "Cotizacion":
         d = dict(d)
-        items = [Item(**i) for i in d.pop("items", [])]
+        items = [Item(**{k: v for k, v in i.items() if k in Item.__dataclass_fields__}) for i in d.pop("items", [])]
         c = Cotizacion(**{k: v for k, v in d.items() if k in Cotizacion.__dataclass_fields__})
         c.items = items
         return c

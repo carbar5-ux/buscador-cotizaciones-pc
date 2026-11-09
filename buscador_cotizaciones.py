@@ -21,7 +21,7 @@ import socket
 import sys
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +31,7 @@ if sys.version_info < (3, 11):
 import tomllib  # noqa: E402
 
 from actualizador import actualizar_si_hay, version_local
+from clasificador import clasificar_y_copiar, es_clasificada, fecha_archivo
 from consola import Barra, ManejadorConsola, _duracion, estado_vigilancia, terminado
 from excel_writer import construir_excel
 from extractor import extraer_cotizacion
@@ -54,6 +55,7 @@ CONFIG_DEFECTO = {
     "quitar_borrados": True,
     "procesos": 0,
     "max_paginas_tablas": 10,
+    "clasificar": True,
     "aviso_ventana": True,
     "aviso_sonido": True,
     "avisar_desde": 5,
@@ -294,8 +296,11 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
     pendientes: list[tuple[str, Path, os.stat_result, str]] = []
 
     # 1) qué hay que leer (rápido: solo fecha y tamaño; huella solo si cambió)
+    por_revisar: list[tuple[str, Path, os.stat_result]] = []
     for pdf in pdfs:
         clave = pdf.relative_to(carpeta).as_posix()
+        if es_clasificada(clave):  # copias hechas por el clasificador: no son cotizaciones nuevas
+            continue
         vigentes.add(clave)
         try:
             st = pdf.stat()
@@ -306,10 +311,22 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
         reg = db.get(clave)
         if reg and not reprocesar and reg["tamano"] == st.st_size and reg["mtime"] == st.st_mtime:
             continue
+        por_revisar.append((clave, pdf, st))
+
+    # huellas de varios archivos a la vez (con cientos de PDF nuevos esto ahorra bastante)
+    def _huella(pdf: Path):
         try:
-            h = hash_archivo(pdf)
+            return hash_archivo(pdf)
         except OSError as e:
-            log.warning("No se pudo abrir %s (%s); se reintentará.", clave, e)
+            return e
+
+    with ThreadPoolExecutor(max_workers=8) as hilos:
+        huellas = list(hilos.map(_huella, [p for _, p, _ in por_revisar]))
+
+    for (clave, pdf, st), h in zip(por_revisar, huellas):
+        reg = db.get(clave)
+        if isinstance(h, Exception):
+            log.warning("No se pudo abrir %s (%s); se reintentará.", clave, h)
             continue
         if reg and reg["hash"] == h and not reprocesar:
             reg["tamano"], reg["mtime"] = st.st_size, st.st_mtime
@@ -483,6 +500,8 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
         actualizar_excel(cfg, carpeta, db, en_barra=True)
 
     cambios = escanear(cfg, carpeta, db, args.reprocesar, guardar_avance)
+    fecha_cat = fecha_archivo()
+    cambios = clasificar_y_copiar(db, carpeta, cfg, todo=True) or cambios  # por si cambiaron las categorías
     guardar_db(archivo_db, db)
     pendiente = cambios and not actualizar_excel(cfg, carpeta, db)
     if not cambios:
@@ -526,7 +545,13 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
             if not carpeta.is_dir():
                 log.warning("La carpeta no está disponible; reintentando...")
                 continue
-            if escanear(cfg, carpeta, db, guardar=guardar_avance):
+            hubo = escanear(cfg, carpeta, db, guardar=guardar_avance)
+            nueva_fecha = fecha_archivo()  # ¿editaron categorias.txt? -> reclasificar todo
+            reclasificar = nueva_fecha != fecha_cat
+            fecha_cat = nueva_fecha
+            if reclasificar:
+                log.info("Cambiaron las categorías: reclasificando todas las cotizaciones...")
+            if clasificar_y_copiar(db, carpeta, cfg, todo=reclasificar) or hubo:
                 guardar_db(archivo_db, db)
                 pendiente = True
             if pendiente:
