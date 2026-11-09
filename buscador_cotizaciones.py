@@ -191,7 +191,16 @@ def buscar_pdfs(carpeta: Path, recursivo: bool) -> list[Path]:
 
 
 def _prioridad_baja() -> None:
-    """Los procesos lectores usan todo el procesador libre sin trabar el PC."""
+    """Prepara cada proceso lector: sin mensajes en pantalla y con prioridad baja.
+
+    En Windows cada proceso lector parte de cero; sin esto, cualquier aviso de las
+    librerías de PDF saldría directo a la consola y taparía la barra.
+    """
+    logging.getLogger().addHandler(logging.NullHandler())
+    logging.getLogger().setLevel(logging.ERROR)
+    import warnings
+
+    warnings.simplefilter("ignore")
     try:
         if sys.platform == "win32":
             import ctypes

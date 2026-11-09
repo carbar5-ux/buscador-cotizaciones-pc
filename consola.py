@@ -82,6 +82,8 @@ class ManejadorConsola(logging.StreamHandler):
 
 
 def _duracion(seg: float) -> str:
+    if seg < 1.5:
+        return "1 segundo"
     if seg < 90:
         return f"{seg:.0f} segundos"
     if seg < 5400:

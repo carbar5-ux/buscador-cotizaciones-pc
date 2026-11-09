@@ -20,7 +20,16 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
+import logging
+import warnings
+
 import pdfplumber
+
+# Las librerías de PDF avisan de detalles internos sin importancia (p. ej. "Cannot set
+# non-stroke color..."). No afectan la lectura y llenan la pantalla: se silencian.
+for _nombre in ("pdfminer", "pdfplumber", "pypdfium2", "PIL"):
+    logging.getLogger(_nombre).setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", module=r"(pdfminer|pdfplumber|pypdfium2)")
 
 # --------------------------------------------------------------------------
 # Modelos
