@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -256,8 +257,8 @@ def avisar_fin(cfg: dict, excel: Path, minimo: int, esperar: bool) -> None:
             winsound.MessageBeep(winsound.MB_ICONASTERISK)
         except Exception:
             pass
-    if not cfg.get("aviso_ventana", True) or leidas < minimo:
-        return
+    if not cfg.get("aviso_ventana", True) or leidas < minimo or cfg.get("_ventana"):
+        return  # con la ventana abierta, el aviso se muestra en ella
 
     def ventana() -> None:
         try:
@@ -385,7 +386,35 @@ def actualizar_excel(cfg: dict, carpeta: Path, db: dict, en_barra: bool = False)
         return False
 
 
-def main() -> int:
+def candado_instancia():
+    """Evita dos copias vigilando a la vez (escribirían el mismo Excel). None si ya hay otra abierta."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 47653))
+        s.listen(1)
+        s.setblocking(False)
+        return s
+    except OSError:
+        s.close()
+        return None
+
+
+def _piden_la_ventana(candado: socket.socket) -> bool:
+    """La ventana pidió el control (otra copia quiere abrirse)."""
+    try:
+        conn, _ = candado.accept()
+    except (BlockingIOError, OSError):
+        return False
+    try:
+        conn.sendall(b"consola")
+        conn.close()
+    except OSError:
+        pass
+    candado.close()
+    return True
+
+
+def main(argv: list[str] | None = None, detener: threading.Event | None = None, ventana: bool = False) -> int:
     ap = argparse.ArgumentParser(description="Lee cotizaciones PDF de una carpeta y arma un Excel base.")
     ap.add_argument("--vigilar", action="store_true", help="queda atento a PDFs nuevos y actualiza el Excel")
     ap.add_argument("--reprocesar", action="store_true", help="vuelve a leer todos los PDF")
@@ -393,16 +422,17 @@ def main() -> int:
     ap.add_argument("--carpeta", type=Path, help="carpeta de cotizaciones (no la guarda en config)")
     ap.add_argument("--excel", type=Path, help="ruta del Excel de salida")
     ap.add_argument("--abrir", action="store_true", help="abre el Excel base")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     manejadores: list[logging.Handler] = [logging.FileHandler(BASE / "registro.log", encoding="utf-8")]
-    if sys.stdout is not None:  # con pythonw (segundo plano) no hay consola
+    if sys.stdout is not None and not ventana:  # con pythonw (segundo plano) no hay consola
         # en color y sin pisar la barra; el detalle de cada PDF va solo al registro
         manejadores.append(ManejadorConsola(sys.stdout))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%d-%m %H:%M:%S",
                         handlers=manejadores)
 
     cfg = leer_config()
+    cfg["_ventana"] = ventana
     log.info("Buscador de cotizaciones, versión %s", version_local())
     if not args.abrir:
         actualizar_si_hay(cfg)  # si hay versión nueva, se instala y el programa se reinicia solo
@@ -458,16 +488,26 @@ def main() -> int:
         return 0
 
     intervalo = max(2, int(cfg["intervalo_segundos"]))
-    log.info("Vigilando la carpeta cada %d s. Guarda cotizaciones y el Excel se actualizará solo. (Ctrl+C para salir)",
-             intervalo)
+    log.info("Vigilando la carpeta cada %d s. Guarda cotizaciones y el Excel se actualizará solo.%s",
+             intervalo, "" if ventana else " (Ctrl+C para salir)")
     tick, proxima, ultima = 0, time.monotonic() + intervalo, datetime.now().strftime("%H:%M:%S")
+    candado = candado_instancia() if not ventana else True  # la ventana toma su propio candado
+    if candado is None:
+        log.error("El buscador ya está abierto en este PC (quizás en segundo plano). Se cierra esta copia.")
+        return 0
     cada_act = max(1.0, float(cfg["horas_entre_actualizaciones"])) * 3600
     proxima_act = time.monotonic() + cada_act
     try:
-        while True:
+        while not (detener and detener.is_set()):
             estado_vigilancia(len(db), ultima, tick)  # línea siempre presente
             time.sleep(1)
             tick += 1
+            if isinstance(candado, socket.socket) and _piden_la_ventana(candado):
+                log.info("Se abrió la ventana del buscador: esta copia en segundo plano se cierra.")
+                return 0
+            if detener is not None and getattr(detener, "revisar_ya", False):
+                detener.revisar_ya = False
+                proxima = 0  # botón "Revisar ahora" de la ventana
             if time.monotonic() > proxima_act:
                 proxima_act = time.monotonic() + cada_act
                 actualizar_si_hay(cfg)  # se reinicia solo si encontró una versión nueva

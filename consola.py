@@ -46,6 +46,18 @@ BLOQUES = HAY_CONSOLA and _bloques_ok()
 LLENO, VACIO = ("█", "░") if BLOQUES else ("#", "-")
 
 
+# Si la ventana (ventana.py) está abierta, recibe aquí cada avance para dibujarlo.
+OYENTE = None
+
+
+def avisar(tipo: str, **datos) -> None:
+    if OYENTE is not None:
+        try:
+            OYENTE(tipo, datos)
+        except Exception:
+            pass
+
+
 def c(texto: str, *codigos: str) -> str:
     return f"\033[{';'.join(codigos)}m{texto}\033[0m" if COLOR and codigos else texto
 
@@ -99,10 +111,14 @@ class Barra:
     def __init__(self, total: int):
         self.total, self.hechos, self.inicio = total, 0, time.monotonic()
         self.activa = HAY_CONSOLA and total > 0
+        avisar("inicio", total=total)
         self.dibujar("")
 
     def avanzar(self, nombre: str) -> None:
         self.hechos += 1
+        transcurrido = time.monotonic() - self.inicio
+        falta = transcurrido / self.hechos * (self.total - self.hechos)
+        avisar("avance", hechos=self.hechos, total=self.total, nombre=Path(nombre).name, falta=falta)
         self.dibujar(nombre)
 
     def dibujar(self, nombre: str) -> None:
@@ -155,6 +171,7 @@ _LETRAS = {
 
 def terminado(leidas: int, seg: float, total_excel: int, excel: Path) -> None:
     """TERMINADO en letras grandes rojas, con la cantidad de cotizaciones."""
+    avisar("terminado", leidas=leidas, seg=seg, total_excel=total_excel, excel=str(excel))
     if not HAY_CONSOLA:
         return
     filas = ["  ".join(_LETRAS[l][i] for l in "TERMINADO") for i in range(5)]
@@ -181,6 +198,7 @@ _GIRO = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 def estado_vigilancia(total_excel: int, ultima: str, tick: int) -> None:
     """Línea fija abajo mientras vigila: siempre muestra que el programa sigue trabajando."""
+    avisar("vigilando", total_excel=total_excel, ultima=ultima)
     giro = _GIRO[tick % len(_GIRO)] if BLOQUES else "|/-\\"[tick % 4]
     texto = (
         c("[", GRIS) + c(LLENO * Barra.ANCHO, VERDE) + c("]", GRIS) + " " + c("100%", BLANCO, NEGRITA)

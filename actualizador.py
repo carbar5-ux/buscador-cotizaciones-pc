@@ -24,7 +24,7 @@ BASE = Path(__file__).resolve().parent
 ARCHIVO_VERSION = BASE / "VERSION"
 
 # Solo estos archivos se actualizan; config.toml y los datos del usuario nunca se tocan.
-EXTENSIONES = {".py", ".bat", ".ico", ".md"}
+EXTENSIONES = {".py", ".bat", ".ico", ".md", ".pdf"}
 EXTRA = {"VERSION", "requirements.txt"}
 NUNCA = {"config.toml"}
 
@@ -116,15 +116,43 @@ def instalar(token: str) -> bool:
 
 
 def reiniciar() -> None:
-    """Vuelve a abrir el programa (con la versión nueva) en la misma ventana y cierra este."""
-    script = str(BASE / "buscador_cotizaciones.py")
-    subprocess.Popen([sys.executable, script, *sys.argv[1:]], cwd=str(BASE))
-    sys.exit(0)
+    """Vuelve a abrir el programa (con la versión nueva) y cierra este.
+
+    Sirve tanto para la consola como para la ventana: relanza el mismo script con
+    los mismos argumentos y termina el proceso actual de inmediato.
+    """
+    script = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0].endswith(".py") \
+        else BASE / "buscador_cotizaciones.py"
+    subprocess.Popen([sys.executable, str(script), *sys.argv[1:]], cwd=str(BASE))
+    logging.shutdown()
+    os._exit(0)
+
+
+# Archivos que una versión anterior del actualizador no sabía descargar: si faltan, se traen.
+REQUERIDOS = ["Manual_de_uso.pdf"]
+
+
+def asegurar_archivos(cfg: dict) -> None:
+    token = str(cfg.get("token_github") or "").strip()
+    for nombre in REQUERIDOS:
+        destino = BASE / nombre
+        if destino.exists():
+            continue
+        try:
+            datos = _pedir(f"https://api.github.com/repos/{REPO}/contents/{nombre}?ref={RAMA}", token,
+                           crudo=True, timeout=60)
+        except Exception:
+            continue  # sin internet: se intenta la próxima vez
+        tmp = destino.with_name("~act_" + nombre)
+        tmp.write_bytes(datos)
+        os.replace(tmp, destino)
+        log.info("Descargado: %s", nombre)
 
 
 def actualizar_si_hay(cfg: dict, reiniciar_al_terminar: bool = True) -> bool:
     if not cfg.get("actualizar_automatico", True):
         return False
+    asegurar_archivos(cfg)
     token = str(cfg.get("token_github") or "").strip()
     nueva = buscar_actualizacion(token)
     if not nueva:
