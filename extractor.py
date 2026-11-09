@@ -733,10 +733,21 @@ def controlar(cot: Cotizacion) -> None:
 # --------------------------------------------------------------------------
 
 
-def leer_rapido(ruta: Path) -> tuple[list[str], set[int]] | None:
-    """Texto de cada página con pdfium (muy rápido) y qué páginas tienen líneas dibujadas.
+# Una página con más trazos que esto es un plano o diagrama: buscar tablas ahí tarda minutos y no sirve.
+MAX_TRAZOS_TABLA = 1500
 
-    Devuelve None si pdfium no puede abrir el archivo (se usa entonces pdfplumber).
+# Palabras que tiene cualquier cotización; sin ninguna, es un catálogo, ficha técnica o plano.
+PARECE_COTIZACION = re.compile(
+    r"(?i)precio|p\.?\s?unit|valor\s+unit|unitario|\$|\bneto\b|\biva\b|sub\s*-?\s*total|cotiz|presupuesto|"
+    r"\boferta\b|\btotal\b|quotation|\bquote\b|\bprice\b|amount|importe|\bclp\b|\busd\b|\buf\b|proforma"
+)
+
+
+def leer_rapido(ruta: Path, max_paginas_tablas: int = 0) -> tuple[list[str], set[int]] | None:
+    """Texto de cada página con pdfium (muy rápido) y qué páginas sirven para buscar tablas.
+
+    Sirven las que tienen líneas dibujadas, pero no demasiadas (un plano tiene miles), y solo
+    las primeras `max_paginas_tablas`. Devuelve None si pdfium no puede abrir el archivo.
     """
     try:
         import pypdfium2 as pdfium
@@ -755,8 +766,15 @@ def leer_rapido(ruta: Path) -> tuple[list[str], set[int]] | None:
             tp = pagina.get_textpage()
             textos.append(tp.get_text_range().replace("\r\n", "\n").replace("\r", "\n"))
             tp.close()
-            if any(o.type == pdfium_c.FPDF_PAGEOBJ_PATH for o in pagina.get_objects(max_depth=3)):
-                con_lineas.add(i + 1)
+            if not max_paginas_tablas or i < max_paginas_tablas:
+                trazos = 0
+                for o in pagina.get_objects(max_depth=3):
+                    if o.type == pdfium_c.FPDF_PAGEOBJ_PATH:
+                        trazos += 1
+                        if trazos > MAX_TRAZOS_TABLA:
+                            break
+                if 0 < trazos <= MAX_TRAZOS_TABLA:
+                    con_lineas.add(i + 1)
             pagina.close()
     except Exception:
         return None
@@ -781,7 +799,7 @@ def extraer_cotizacion(
     catálogo o ficha técnica de cientos de páginas tarde minutos.
     """
     cot = Cotizacion(archivo=str(ruta))
-    rapido = leer_rapido(ruta)
+    rapido = leer_rapido(ruta, max_paginas_tablas)
     if rapido is not None:
         paginas_texto, con_lineas = rapido
     else:  # respaldo: todo con pdfplumber
@@ -809,6 +827,10 @@ def extraer_cotizacion(
     else:
         cot.items, cot.metodo = [], "tablas"
         items_txt = items_desde_texto(paginas_texto, formato)
+        if not PARECE_COTIZACION.search(texto):
+            # catálogo, ficha técnica o plano: no tiene precios; no se pierde tiempo buscando tablas
+            con_lineas = set()
+            cot.observaciones.append("No parece una cotización (catálogo, ficha técnica o plano): sin precios")
         # Documento largo (catálogo, ficha técnica) cuyo texto ya trajo las líneas y casi todas cuadran
         # (cantidad × precio = total): se omite el lector de tablas, que es lo más lento. En cotizaciones
         # normales (hasta max_paginas_tablas páginas) siempre se usan las tablas: leen mejor las descripciones.

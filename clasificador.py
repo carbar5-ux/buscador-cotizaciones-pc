@@ -100,6 +100,19 @@ def _copiar(origen: Path, carpeta_cat: Path) -> bool:
     return True
 
 
+def clasificar_una(datos: dict, clave: str, carpeta: Path, categorias: dict[str, list[re.Pattern]]) -> int:
+    """Clasifica una cotización recién leída y copia su PDF a sus carpetas. Devuelve cuántas copias hizo."""
+    copias = 0
+    origen = carpeta / clave
+    for cat in clasificar(datos, clave, categorias):
+        try:
+            if origen.exists() and _copiar(origen, carpeta / CARPETA_CLASIFICADAS / cat):
+                copias += 1
+        except OSError as e:
+            log.warning("No se pudo copiar %s a %s: %s", clave, cat, e)
+    return copias
+
+
 def fecha_archivo() -> float:
     try:
         return ARCHIVO.stat().st_mtime
