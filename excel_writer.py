@@ -10,11 +10,13 @@ from datetime import date, datetime
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.formatting.rule import CellIsRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
+from agrupador import agrupar, descripcion_representativa
 from extractor import Cotizacion, normalizar
 
 AZUL = "1F4E78"
@@ -44,7 +46,9 @@ def _hoja(wb: Workbook, titulo: str, columnas: list[tuple[str, int, str | None]]
     ws = wb.create_sheet(titulo)
     ws.append([c[0] for c in columnas])
     for fila in filas:
-        # un texto que empieza con "=" Excel lo tomaría como fórmula
+        # textos limpios (algunos PDF traen caracteres de control que Excel no acepta) y un texto que
+        # empieza con "=" Excel lo tomaría como fórmula
+        fila = [limpiar_texto(v) for v in fila]
         ws.append([" " + v if isinstance(v, str) and v.startswith(("=", "+", "@")) and not v[1:2].isdigit() else v
                    for v in fila])
     for idx, (_, ancho, fmt) in enumerate(columnas, start=1):
@@ -72,8 +76,16 @@ AZUL_LINK = Font(color="0563C1", underline="single")
 AZUL_BOTON = Font(color="0563C1", underline="single", bold=True)
 
 
+def limpiar_texto(v):
+    """Quita caracteres de control que algunos PDF traen y que Excel no acepta en una celda."""
+    if isinstance(v, str):
+        return ILLEGAL_CHARACTERS_RE.sub("", v)
+    return v
+
+
 def _vincular(ws, fila: int, col: int, ruta: Path, texto: str, fuente: Font = AZUL_LINK) -> None:
     """Celda que abre el PDF con un clic (fórmula HIPERVINCULO: funciona con espacios, tildes y subcarpetas)."""
+    texto = limpiar_texto(texto)
     celda = ws.cell(fila, col)
     destino = str(ruta)
     if len(destino) <= 250 and len(texto) <= 250:
@@ -155,6 +167,8 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     for r, (fmt, clave) in enumerate(zip(fmts_it, claves_it), start=2):
         _vincular(ws, r, 2, carpeta / clave, "Abrir PDF", AZUL_BOTON)
         _vincular(ws, r, 18, carpeta / clave, Path(clave).name)
+        desc = str(ws.cell(r, 10).value or "").strip() or "(sin descripción)"
+        _vincular(ws, r, 10, carpeta / clave, desc)  # clic en el suministro = abre su cotización
         ws.cell(r, 13).number_format = fmt
         ws.cell(r, 15).number_format = fmt
         ws.cell(r, 10).alignment = Alignment(wrap_text=True, vertical="top")
@@ -164,14 +178,11 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         )
 
     # ---------------- Hoja Comparativo de precios ----------------
-    grupos: dict[tuple, list] = defaultdict(list)
-    for clave, c, _ in cotizaciones:
-        for it in c.items:
-            if it.precio_unitario is None or not it.descripcion:
-                continue
-            # por descripción: los códigos cambian de un proveedor a otro
-            clave_g = (normalizar(it.descripcion), normalizar(it.unidad), c.moneda)
-            grupos[clave_g].append((it, c, clave))
+    # mismo producto aunque esté escrito distinto (medidas exactas, palabras parecidas, sinónimos)
+    elementos = [(it.descripcion, it.unidad, c.moneda, (it, c, clave))
+                 for clave, c, _ in cotizaciones for it in c.items
+                 if it.precio_unitario is not None and it.descripcion]
+    grupos_lista = agrupar(elementos)
     col_cmp = [
         ("Descripción", 55, None), ("Códigos", 16, None), ("Unidad", 8, None), ("Moneda", 8, None),
         ("N° cotizaciones", 11, FMT_ENTERO), ("N° proveedores", 11, FMT_ENTERO),
@@ -179,10 +190,13 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         ("Precio máximo", 15, "moneda"), ("Proveedor más caro", 28, None), ("Promedio", 15, "moneda"),
         ("Mediana", 15, "moneda"), ("Dif. máx/mín", 11, FMT_PCT), ("Último precio", 15, "moneda"),
         ("Último proveedor", 28, None), ("Fecha último", 12, FMT_FECHA), ("Ahorro vs último", 11, FMT_PCT),
+        ("N° variantes", 10, FMT_ENTERO), ("Variantes (cómo lo escribe cada proveedor)", 70, None),
     ]
     filas_cmp, fmts_cmp, links_cmp = [], [], []
-    for (_, unidad, moneda), lista3 in grupos.items():
+    for lista3 in grupos_lista:
+        moneda = lista3[0][1].moneda
         lista = [(it, c) for it, c, _ in lista3]
+        variantes = list(dict.fromkeys(it.descripcion.strip() for it, _ in lista))
         precios = [it.precio_unitario for it, _ in lista]
         mn = min(lista, key=lambda t: t[0].precio_unitario)
         mx = max(lista, key=lambda t: t[0].precio_unitario)
@@ -190,10 +204,11 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         provs = {c.rut_proveedor or c.proveedor for _, c in lista}
         p_min, p_max, p_ult = mn[0].precio_unitario, mx[0].precio_unitario, ult[0].precio_unitario
         filas_cmp.append([
-            mn[0].descripcion, ", ".join(sorted({it.codigo for it, _ in lista if it.codigo})), mn[0].unidad, moneda, len(lista), len(provs),
+            descripcion_representativa([it.descripcion for it, _ in lista]), ", ".join(sorted({it.codigo for it, _ in lista if it.codigo})), mn[0].unidad, moneda, len(lista), len(provs),
             p_min, mn[1].proveedor, _fecha(mn[1].fecha), p_max, mx[1].proveedor, statistics.fmean(precios),
             statistics.median(precios), (p_max / p_min - 1) if p_min else None, p_ult, ult[1].proveedor,
             _fecha(ult[1].fecha), (1 - p_min / p_ult) if p_ult else None,
+            len(variantes), " | ".join(variantes[:8]) + (" | …" if len(variantes) > 8 else ""),
         ])
         fmts_cmp.append(_fmt_moneda(moneda))
         clave_de = {id(t[1]): t[2] for t in lista3}
@@ -271,7 +286,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     ws.column_dimensions["B"].width = 26
     ws["A1"] = "Base de cotizaciones"
     ws["A1"].font = Font(bold=True, size=16, color=AZUL)
-    ws["A2"] = f"Carpeta: {carpeta}"
+    ws["A2"] = limpiar_texto(f"Carpeta: {carpeta}")
     ws["A3"] = f"Actualizado: {datetime.now():%d-%m-%Y %H:%M}"
     ws["A2"].font = ws["A3"].font = Font(italic=True, color="666666")
     estados = [f[11] for f in filas_cot]
@@ -301,12 +316,37 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     if por_cat:
         ws.cell(17, 1, "Cotizaciones por categoría").font = Font(bold=True, size=12, color=AZUL)
         for i, (cat, n) in enumerate(sorted(por_cat.items(), key=lambda t: -t[1]), start=18):
-            ws.cell(i, 1, cat).border = borde
+            ws.cell(i, 1, limpiar_texto(cat)).border = borde
             celda = ws.cell(i, 2, n)
             celda.font = Font(bold=True)
             celda.border = borde
     ws.cell(15, 1, "Hojas: Cotizaciones (1 fila por PDF) · Ítems (1 fila por línea) · Comparativo (precios por producto) "
                    "· Proveedores · Revisar (lo que conviene verificar a mano)").font = Font(color="666666")
+
+    # ---------------- Hoja Precios (la primera: lo esencial de cada línea) ----------------
+    col_pre = [
+        ("Empresa", 32, None), ("Fecha", 12, FMT_FECHA), ("Descripción", 60, None), ("Cantidad", 11, FMT_DECIMAL),
+        ("Unidad", 9, None), ("Precio unitario", 16, "moneda"), ("Total", 16, "moneda"), ("Moneda", 8, None),
+        ("N° cotización", 14, None), ("PDF", 11, None),
+    ]
+    filas_pre, extra_pre = [], []
+    for clave, c, _ in cotizaciones:
+        for it in c.items:
+            filas_pre.append([c.proveedor, _fecha(c.fecha), it.descripcion, it.cantidad, it.unidad, it.precio_unitario,
+                              it.total, c.moneda, c.numero, "Abrir PDF"])
+            extra_pre.append((clave, _fmt_moneda(c.moneda)))
+    ws = _hoja(wb, "Precios", col_pre, filas_pre, "TablaPrecios")
+    wb.move_sheet(ws, offset=-(len(wb.sheetnames) - 1))  # primera hoja
+    for r, (clave, fmt) in enumerate(extra_pre, start=2):
+        ws.cell(r, 6).number_format = fmt
+        ws.cell(r, 7).number_format = fmt
+        # clic en el suministro (descripción) = abre su cotización
+        desc = str(ws.cell(r, 3).value or "").strip() or "(sin descripción)"
+        _vincular(ws, r, 3, carpeta / clave, desc)
+        ws.cell(r, 3).alignment = Alignment(wrap_text=True, vertical="top")
+        _vincular(ws, r, 10, carpeta / clave, "Abrir PDF", AZUL_BOTON)
+    ws.freeze_panes = "A2"
+    wb.active = 0
 
     _guardar_atomico(wb, destino)
 

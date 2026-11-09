@@ -19,10 +19,11 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 
 ## El Excel (`Base_Cotizaciones.xlsx`)
 
+- **Precios** (la primera hoja): una fila por suministro con empresa, fecha, descripción, cantidad, unidad, precio unitario, total, moneda y N° de cotización. **Clic en el suministro abre su cotización.**
 - **Resumen**: n° de cotizaciones, proveedores, ítems, monto cotizado, vigentes, por vencer y vencidas.
 - **Cotizaciones**: una fila por PDF, con vínculo para abrir el PDF, y el estado (Vigente / Por vencer / Vencida) en colores.
 - **Ítems**: una fila por cada línea de cada cotización, lista para filtrar o hacer tablas dinámicas.
-- **Comparativo**: agrupa el mismo producto en distintas cotizaciones y muestra el precio mínimo y el proveedor más barato, el máximo, promedio, mediana, diferencia % y el último precio cotizado.
+- **Comparativo**: agrupa el mismo producto aunque cada proveedor lo escriba distinto (columna Variantes) y muestra el precio mínimo y el proveedor más barato, el máximo, promedio, mediana, diferencia % y el último precio cotizado.
 - **Proveedores**: cotizaciones, ítems y montos por proveedor, con sus datos de contacto.
 - **Revisar**: lo que conviene verificar a mano (líneas que no cuadran, totales no encontrados, PDF escaneados o dañados, archivos duplicados).
 
@@ -56,6 +57,12 @@ La primera vez te pregunta cuál es tu carpeta de cotizaciones y la guarda en `c
 El Excel queda en tu carpeta de cotizaciones como `Base_Cotizaciones.xlsx`. Junto a él queda `Base_Cotizaciones_datos.json`, la memoria del programa: solo lee los PDF nuevos o modificados, y si renombras o mueves un PDF no lo vuelve a leer.
 
 > Si el Excel está abierto cuando llega una cotización, el programa espera: al cerrarlo se actualiza en la siguiente pasada. El Excel se regenera completo cada vez, así que **no escribas a mano en él** (haz tus análisis en otro libro que lo consulte).
+
+## Planilla y buscador de precios (en la ventana)
+
+- **Buscar precio** (arriba a la derecha): escribe un suministro, por ejemplo `cable thhn 12`, y presiona Enter. Se abre la planilla con todos sus precios, del más barato al más caro, y el resumen de precio mínimo, último y promedio. Reconoce el mismo producto escrito distinto ("Conductor N°12" = "Cable 12"). Las medidas deben coincidir: 12 AWG no trae 14 AWG.
+- **Planilla**: todas las líneas de todas las cotizaciones (descripción, precio, cantidad, unidad, total, empresa, fecha, N° y categoría), con filtros por texto, empresa, categoría, moneda y rango de fechas. Clic en un título ordena, doble clic en una fila abre el PDF, y **Exportar a Excel** guarda solo lo filtrado.
+- Los sinónimos (conductor = cable, ampolleta = lámpara...) se editan en `sinonimos.txt` (botón **Sinónimos…** de la planilla).
 
 ## Clasificar por categoría (Cables, Alumbrado, ...)
 

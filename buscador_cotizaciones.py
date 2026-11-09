@@ -31,6 +31,7 @@ if sys.version_info < (3, 11):
 import tomllib  # noqa: E402
 
 from actualizador import actualizar_si_hay, version_local
+from agrupador import asegurar_sinonimos
 from clasificador import clasificar_y_copiar, es_clasificada, fecha_archivo
 from consola import Barra, ManejadorConsola, _duracion, estado_vigilancia, terminado
 from excel_writer import construir_excel
@@ -409,6 +410,16 @@ def actualizar_excel(cfg: dict, carpeta: Path, db: dict, en_barra: bool = False)
     except PermissionError:
         log.warning("El Excel está abierto. Ciérralo y se actualizará en la próxima pasada.")
         return False
+    except Exception:  # nunca detener la lectura por un problema al escribir el Excel
+        log.exception("No se pudo escribir el Excel (se reintentará). Los datos leídos quedan guardados.")
+        return False
+
+
+def fecha_sinonimos() -> float:
+    try:
+        return asegurar_sinonimos().stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def candado_instancia():
@@ -439,7 +450,8 @@ def _piden_la_ventana(candado: socket.socket) -> bool:
     return True
 
 
-def main(argv: list[str] | None = None, detener: threading.Event | None = None, ventana: bool = False) -> int:
+def main(argv: list[str] | None = None, detener: threading.Event | None = None, ventana: bool = False,
+         compartido: dict | None = None) -> int:
     ap = argparse.ArgumentParser(description="Lee cotizaciones PDF de una carpeta y arma un Excel base.")
     ap.add_argument("--vigilar", action="store_true", help="queda atento a PDFs nuevos y actualiza el Excel")
     ap.add_argument("--reprocesar", action="store_true", help="vuelve a leer todos los PDF")
@@ -487,6 +499,8 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
         return 0
 
     db = cargar_db(archivo_db)
+    if compartido is not None:  # la ventana usa estos datos para el buscador de precios
+        compartido.update(db=db, carpeta=carpeta)
     log.info("Carpeta de cotizaciones: %s", carpeta)
     log.info("=" * 70)
     log.info("EL EXCEL SE GUARDA EN:  %s", excel)
@@ -501,6 +515,7 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
 
     cambios = escanear(cfg, carpeta, db, args.reprocesar, guardar_avance)
     fecha_cat = fecha_archivo()
+    fecha_sin = fecha_sinonimos()
     cambios = clasificar_y_copiar(db, carpeta, cfg, todo=True) or cambios  # por si cambiaron las categorías
     guardar_db(archivo_db, db)
     pendiente = cambios and not actualizar_excel(cfg, carpeta, db)
@@ -553,6 +568,10 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
                 log.info("Cambiaron las categorías: reclasificando todas las cotizaciones...")
             if clasificar_y_copiar(db, carpeta, cfg, todo=reclasificar) or hubo:
                 guardar_db(archivo_db, db)
+                pendiente = True
+            if fecha_sinonimos() != fecha_sin:  # cambiaron los sinónimos: rehacer el Comparativo
+                fecha_sin = fecha_sinonimos()
+                log.info("Cambiaron los sinónimos: se rehace el Comparativo.")
                 pendiente = True
             if pendiente:
                 pendiente = not actualizar_excel(cfg, carpeta, db)

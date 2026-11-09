@@ -540,7 +540,8 @@ def items_desde_tablas(pdf, formato: str, paginas: set[int] | None = None) -> li
 UNIDAD_RE = re.compile(
     r"(?i)^(un|und|uds?|unid|unidad(?:es)?|c/u|cu|pza|pzas?|kg|kgs|gr|g|ton|tn|lt|lts|l|m|mt|mts|ml|m2|m²|m3|m³|"
     r"cm|mm|gl|gal|glb|global|hr|hrs|h|hh|dia|días?|mes|sem|caja|cj|rollo|rl|par|jgo|juego|set|kit|bolsa|saco|tambor|"
-    r"tira|barra|plancha|pl|vara|pie|ft|pulg|lote|ea|pc|pcs|bid[oó]n|galon|tineta)\.?$"
+    r"tira|barra|plancha|pl|vara|pie|ft|pulg|lote|ea|pc|pcs|bid[oó]n|galon|tineta|metros?|mtrs?|kilos?|litros?|"
+    r"piezas?|rollos?|cajas?|sacos?|bolsas?|pares|juegos|unidades|und\.|uni)\.?$"
 )
 
 
