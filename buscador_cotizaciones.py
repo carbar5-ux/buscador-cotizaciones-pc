@@ -29,6 +29,8 @@ if sys.version_info < (3, 11):
 
 import tomllib  # noqa: E402
 
+from actualizador import actualizar_si_hay, version_local
+from consola import Barra, ManejadorConsola, _duracion, estado_vigilancia, terminado
 from excel_writer import construir_excel
 from extractor import extraer_cotizacion
 
@@ -53,6 +55,9 @@ CONFIG_DEFECTO = {
     "aviso_ventana": True,
     "aviso_sonido": True,
     "avisar_desde": 5,
+    "actualizar_automatico": True,
+    "horas_entre_actualizaciones": 6,
+    "token_github": "",
 }
 
 
@@ -217,54 +222,6 @@ def _resumen(datos: dict) -> str:
     ])
 
 
-class Barra:
-    """Barra de progreso en la consola: [██████░░░░]  60%  12/20  quedan ~1 min."""
-
-    def __init__(self, total: int):
-        self.total, self.hechos, self.inicio = total, 0, time.monotonic()
-        self.activa = sys.stdout is not None and total > 0
-        self.llenos, self.vacios = "█", "░"
-        try:
-            (self.llenos + self.vacios).encode(sys.stdout.encoding or "utf-8")
-        except (UnicodeEncodeError, LookupError, AttributeError):
-            self.llenos, self.vacios = "#", "-"
-        self.dibujar("")
-
-    def avanzar(self, nombre: str) -> None:
-        self.hechos += 1
-        self.dibujar(nombre)
-
-    def dibujar(self, nombre: str) -> None:
-        if not self.activa:
-            return
-        pct = self.hechos / self.total
-        lleno = int(30 * pct)
-        resto = ""
-        if self.hechos:
-            seg = (time.monotonic() - self.inicio) / self.hechos * (self.total - self.hechos)
-            resto = f"quedan ~{seg:.0f} s" if seg < 90 else f"quedan ~{seg / 60:.0f} min"
-        texto = (f"\r[{self.llenos * lleno}{self.vacios * (30 - lleno)}] {pct:4.0%}  "
-                 f"{self.hechos}/{self.total}  {resto:<16} {Path(nombre).name[:35]:<35}")
-        sys.stdout.write(texto)
-        sys.stdout.flush()
-
-    def cerrar(self) -> float:
-        seg = time.monotonic() - self.inicio
-        if self.activa:
-            sys.stdout.write(f"\r{' ' * 110}\r")
-            sys.stdout.flush()
-        log.info("Leídas %d cotizaciones en %s.", self.total, _duracion(seg))
-        return seg
-
-
-def _duracion(seg: float) -> str:
-    if seg < 90:
-        return f"{seg:.0f} segundos"
-    if seg < 5400:
-        return f"{seg / 60:.0f} minutos"
-    return f"{seg / 3600:.1f} horas"
-
-
 def _titulo_consola(texto: str) -> None:
     if sys.platform == "win32":
         try:
@@ -390,7 +347,9 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
                     except Exception as e:  # el proceso que leía ese PDF se cayó
                         datos = {"archivo": clave, "metodo": "error", "observaciones": [f"No se pudo leer el PDF: {e}"], "items": []}
                     registrar(clave, st, h, datos)
-        cfg["_ultima_lectura"] = (len(pendientes), barra.cerrar())
+        seg = barra.cerrar()
+        log.info("Leídas %d cotizaciones en %s.", len(pendientes), _duracion(seg), extra={"solo_archivo": barra.activa})
+        cfg["_ultima_lectura"] = (len(pendientes), seg)
         cambios = True
 
     if cfg["quitar_borrados"]:
@@ -429,14 +388,15 @@ def main() -> int:
 
     manejadores: list[logging.Handler] = [logging.FileHandler(BASE / "registro.log", encoding="utf-8")]
     if sys.stdout is not None:  # con pythonw (segundo plano) no hay consola
-        consola = logging.StreamHandler(sys.stdout)
-        # el detalle de cada PDF va solo al registro mientras se muestra la barra
-        consola.addFilter(lambda r: not getattr(r, "solo_archivo", False))
-        manejadores.append(consola)
+        # en color y sin pisar la barra; el detalle de cada PDF va solo al registro
+        manejadores.append(ManejadorConsola(sys.stdout))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%d-%m %H:%M:%S",
                         handlers=manejadores)
 
     cfg = leer_config()
+    log.info("Buscador de cotizaciones, versión %s", version_local())
+    if not args.abrir:
+        actualizar_si_hay(cfg)  # si hay versión nueva, se instala y el programa se reinicia solo
     carpeta = args.carpeta or (Path(cfg["carpeta_cotizaciones"]) if cfg["carpeta_cotizaciones"] else None)
     if args.configurar or carpeta is None or not carpeta.is_dir():
         if carpeta is not None and not args.configurar:
@@ -481,6 +441,8 @@ def main() -> int:
     if not cambios:
         log.info("Sin cotizaciones nuevas. Excel al día: %s", excel)
     _titulo_consola("Buscador de cotizaciones - " + ("vigilando" if args.vigilar else "terminado"))
+    leidas, seg = cfg.get("_ultima_lectura", (0, 0.0))
+    terminado(leidas, seg, len(db), excel)
     avisar_fin(cfg, excel, minimo=1, esperar=not args.vigilar)  # primera lectura: siempre avisa
 
     if not args.vigilar:
@@ -489,9 +451,21 @@ def main() -> int:
     intervalo = max(2, int(cfg["intervalo_segundos"]))
     log.info("Vigilando la carpeta cada %d s. Guarda cotizaciones y el Excel se actualizará solo. (Ctrl+C para salir)",
              intervalo)
+    tick, proxima, ultima = 0, time.monotonic() + intervalo, datetime.now().strftime("%H:%M:%S")
+    cada_act = max(1.0, float(cfg["horas_entre_actualizaciones"])) * 3600
+    proxima_act = time.monotonic() + cada_act
     try:
         while True:
-            time.sleep(intervalo)
+            estado_vigilancia(len(db), ultima, tick)  # línea siempre presente
+            time.sleep(1)
+            tick += 1
+            if time.monotonic() > proxima_act:
+                proxima_act = time.monotonic() + cada_act
+                actualizar_si_hay(cfg)  # se reinicia solo si encontró una versión nueva
+            if time.monotonic() < proxima:
+                continue
+            proxima = time.monotonic() + intervalo
+            ultima = datetime.now().strftime("%H:%M:%S")
             if not carpeta.is_dir():
                 log.warning("La carpeta no está disponible; reintentando...")
                 continue
@@ -500,6 +474,9 @@ def main() -> int:
                 pendiente = True
             if pendiente:
                 pendiente = not actualizar_excel(cfg, carpeta, db)
+            if "_ultima_lectura" in cfg:
+                leidas, seg = cfg["_ultima_lectura"]
+                terminado(leidas, seg, len(db), excel)
             # cotizaciones sueltas: solo sonido; tandas grandes: también la ventana
             avisar_fin(cfg, excel, minimo=int(cfg["avisar_desde"]), esperar=False)
     except KeyboardInterrupt:
@@ -508,4 +485,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        logging.getLogger("cotizaciones").exception("Error inesperado")
+        if sys.stdin is not None and sys.stdin.isatty():
+            input("\nOcurrió un error (queda anotado en registro.log). Presiona Enter para cerrar...")
+        sys.exit(1)

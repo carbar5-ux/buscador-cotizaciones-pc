@@ -1,4 +1,2 @@
 @echo off
-chcp 65001 >nul
-cd /d "%~dp0"
-.venv\Scripts\python buscador_cotizaciones.py --abrir || pause
+chcp 65001 >nul & cd /d "%~dp0" & .venv\Scripts\python buscador_cotizaciones.py --abrir || pause & exit /b

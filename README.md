@@ -38,9 +38,12 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 | `vigilar.bat` | Queda abierto revisando la carpeta cada 10 segundos y actualiza el Excel cuando llegan, cambian o se borran cotizaciones. |
 | `iniciar_con_windows.bat` | Hace que la vigilancia parta sola y en segundo plano cada vez que enciendes el PC. |
 | `abrir_excel.bat` | Abre el Excel base directamente. |
+| `actualizar.bat` | Busca e instala la última versión ahora. |
 | `crear_acceso_directo.bat` | Pone en el Escritorio dos accesos directos con signo **$**: **Buscador Cotizaciones** (verde) y **Excel Cotizaciones** (naranjo). `instalar.bat` ya los crea. |
 
 Mientras lee, muestra una barra con el porcentaje y el tiempo que falta. Usa **todos los núcleos del procesador** (un PDF por núcleo) con prioridad baja, para no trabar el PC mientras trabajas. El texto se lee con pdfium, que es muy rápido, y el lector de tablas solo se usa en las páginas que tienen líneas dibujadas. La primera lectura de una carpeta grande es la que más demora; después solo lee las cotizaciones nuevas. El Excel se crea al partir y se actualiza cada minuto mientras lee.
+
+**En pantalla:** la barra de progreso tiene colores (rojo, amarillo y verde según avanza) y queda siempre visible. Al terminar aparece **TERMINADO** en letras grandes rojas con la cantidad de cotizaciones leídas. Mientras vigila, la última línea muestra que el programa sigue trabajando y cuántas cotizaciones hay en el Excel.
 
 **Aviso al terminar:** cuando termina de leer, suena un aviso y aparece una ventana con la cantidad de cotizaciones leídas, el tiempo que tomó y un botón para abrir el Excel. En modo vigilancia, si llegan pocas cotizaciones (menos de `avisar_desde`), solo suena.
 
@@ -49,6 +52,19 @@ La primera vez te pregunta cuál es tu carpeta de cotizaciones y la guarda en `c
 El Excel queda en tu carpeta de cotizaciones como `Base_Cotizaciones.xlsx`. Junto a él queda `Base_Cotizaciones_datos.json`, la memoria del programa: solo lee los PDF nuevos o modificados, y si renombras o mueves un PDF no lo vuelve a leer.
 
 > Si el Excel está abierto cuando llega una cotización, el programa espera: al cerrarlo se actualiza en la siguiente pasada. El Excel se regenera completo cada vez, así que **no escribas a mano en él** (haz tus análisis en otro libro que lo consulte).
+
+## Actualización automática
+
+Al abrirse, y cada 6 horas mientras vigila, el programa revisa si hay una versión nueva en GitHub (compara el archivo `VERSION`). Si la hay, descarga solo los archivos del programa, instala las librerías nuevas si hacen falta y se reinicia solo. **Nunca toca `config.toml`, el Excel ni los datos.** Sin internet, sigue funcionando normal. Para buscar una actualización a mano: `actualizar.bat`.
+
+Si el repositorio de GitHub es **privado**, el PC necesita una clave de solo lectura:
+
+1. En GitHub: foto de perfil → **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token**.
+2. En *Repository access* elige **Only select repositories → buscador-cotizaciones-pc**.
+3. En *Permissions → Repository permissions → Contents* elige **Read-only**. No le des ningún otro permiso.
+4. Copia la clave y pégala en `config.toml`: `token_github = 'github_pat_...'`.
+
+Si el repositorio es **público**, no hace falta clave.
 
 ## Configuración (`config.toml`)
 
@@ -65,6 +81,9 @@ El Excel queda en tu carpeta de cotizaciones como `Base_Cotizaciones.xlsx`. Junt
 | `quitar_borrados` | Si borras un PDF, también se quita del Excel. |
 | `aviso_sonido` / `aviso_ventana` | Sonido y ventana al terminar de leer. |
 | `avisar_desde` | En modo vigilancia, la ventana sale solo si llegan al menos estas cotizaciones juntas. |
+| `actualizar_automatico` | Buscar e instalar versiones nuevas solo. |
+| `horas_entre_actualizaciones` | Cada cuánto revisa mientras vigila. |
+| `token_github` | Clave de solo lectura, solo si el repositorio es privado. |
 | `procesos` | Cuántos PDF leer a la vez (0 = todos los núcleos del procesador). |
 
 ## PDF escaneados (opcional)
