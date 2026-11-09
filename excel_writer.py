@@ -83,8 +83,11 @@ def _estilo(celda, **atributos) -> None:
         celda._style = copy(guardado)
 
 
-def _hoja(wb: Workbook, titulo: str, columnas: list[tuple[str, int, str | None]], filas: list[list], nombre_tabla: str):
-    """Crea una hoja con tabla de Excel (filtros, bandas), anchos y formatos."""
+def _hoja(wb: Workbook, titulo: str, columnas: list[tuple[str, int, str | None]], filas: list[list], nombre_tabla: str,
+          congelar: str = "B2"):
+    """Crea una hoja con tabla de Excel (filtros, bandas), anchos y formatos. congelar: celda donde se
+    inmoviliza la vista (se fija una sola vez: cambiarla después deja selecciones sobrantes que Excel
+    "repara" al abrir)."""
     ws = wb.create_sheet(titulo)
     ws.append([c[0] for c in columnas])
     for fila in filas:
@@ -119,7 +122,7 @@ def _hoja(wb: Workbook, titulo: str, columnas: list[tuple[str, int, str | None]]
         lado = "center" if celda.column in centradas else "right" if celda.column in numericas else "left"
         celda.alignment = Alignment(wrap_text=True, vertical="center", horizontal=lado)
     ws.row_dimensions[1].height = 30
-    ws.freeze_panes = "B2"
+    ws.freeze_panes = congelar
     ws.sheet_view.showGridLines = False
     ws.sheet_view.zoomScale = 100
     # impresión: horizontal, todas las columnas en el ancho de la hoja, encabezado repetido
@@ -466,7 +469,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
             filas_pre.append([c.proveedor, _fecha(c.fecha), it.descripcion, it.cantidad, it.unidad, it.precio_unitario,
                               it.total, c.moneda, c.numero, "Abrir PDF"])
             extra_pre.append((clave, _fmt_moneda(c.moneda)))
-    ws = _hoja(wb, "Precios", col_pre, filas_pre, "TablaPrecios")
+    ws = _hoja(wb, "Precios", col_pre, filas_pre, "TablaPrecios", congelar="A2")
     wb.move_sheet(ws, offset=-(len(wb.sheetnames) - 1))  # primera hoja
     for r, (clave, fmt) in enumerate(extra_pre, start=2):
         _estilo(ws.cell(r, 6), number_format=fmt)
@@ -475,7 +478,6 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         desc = str(ws.cell(r, 3).value or "").strip() or "(sin descripción)"
         _vincular(ws, r, 3, carpeta / clave, desc)
         _vincular(ws, r, 10, carpeta / clave, "Abrir PDF", AZUL_BOTON)
-    ws.freeze_panes = "A2"
 
     # orden de las hojas y color de cada pestaña
     orden = ["Precios", "Resumen", "Cotizaciones", "Ítems", "Proveedores", "Revisar", "Comparativo"]
