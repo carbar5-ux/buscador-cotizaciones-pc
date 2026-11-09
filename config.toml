@@ -33,3 +33,9 @@ quitar_borrados = true
 
 # Cuántos PDF leer a la vez. 0 = automático (usa todos los núcleos del procesador)
 procesos = 0
+
+# Aviso al terminar de leer: sonido y ventana con botón para abrir el Excel
+aviso_sonido = true
+aviso_ventana = true
+# En modo vigilancia, la ventana sale solo si llegan al menos estas cotizaciones juntas (si son menos, solo suena)
+avisar_desde = 5

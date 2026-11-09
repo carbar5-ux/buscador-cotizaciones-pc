@@ -42,6 +42,8 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 
 Mientras lee, muestra una barra con el porcentaje y el tiempo que falta. Usa **todos los núcleos del procesador** (un PDF por núcleo) con prioridad baja, para no trabar el PC mientras trabajas. El texto se lee con pdfium, que es muy rápido, y el lector de tablas solo se usa en las páginas que tienen líneas dibujadas. La primera lectura de una carpeta grande es la que más demora; después solo lee las cotizaciones nuevas. El Excel se crea al partir y se actualiza cada minuto mientras lee.
 
+**Aviso al terminar:** cuando termina de leer, suena un aviso y aparece una ventana con la cantidad de cotizaciones leídas, el tiempo que tomó y un botón para abrir el Excel. En modo vigilancia, si llegan pocas cotizaciones (menos de `avisar_desde`), solo suena.
+
 La primera vez te pregunta cuál es tu carpeta de cotizaciones y la guarda en `config.toml`. Para cambiarla: `procesar.bat --configurar`.
 
 El Excel queda en tu carpeta de cotizaciones como `Base_Cotizaciones.xlsx`. Junto a él queda `Base_Cotizaciones_datos.json`, la memoria del programa: solo lee los PDF nuevos o modificados, y si renombras o mueves un PDF no lo vuelve a leer.
@@ -61,6 +63,8 @@ El Excel queda en tu carpeta de cotizaciones como `Base_Cotizaciones.xlsx`. Junt
 | `dias_aviso_vencimiento` | Días antes del vencimiento para marcar “Por vencer”. |
 | `mis_ruts` | RUT de tu empresa, ej. `['77.888.999-K']`, para no confundirlo con el del proveedor. |
 | `quitar_borrados` | Si borras un PDF, también se quita del Excel. |
+| `aviso_sonido` / `aviso_ventana` | Sonido y ventana al terminar de leer. |
+| `avisar_desde` | En modo vigilancia, la ventana sale solo si llegan al menos estas cotizaciones juntas. |
 | `procesos` | Cuántos PDF leer a la vez (0 = todos los núcleos del procesador). |
 
 ## PDF escaneados (opcional)
