@@ -23,6 +23,7 @@ sys.path.insert(0, str(BASE))
 
 import consola  # noqa: E402
 from actualizador import reiniciar, version_local  # noqa: E402
+from clasificador import CARPETA_CLASIFICADAS, asegurar_archivo  # noqa: E402
 from buscador_cotizaciones import candado_instancia, guardar_carpeta, leer_config, main  # noqa: E402
 from consola import _duracion  # noqa: E402
 
@@ -222,6 +223,10 @@ class Ventana:
                    cursor="hand2").pack(side="left")
         ttk.Button(bot, text="Manual", style="Gris.TButton", command=lambda: abrir(BASE / "Manual_de_uso.pdf"),
                    cursor="hand2").pack(side="right")
+        ttk.Button(bot, text="Categorías", style="Gris.TButton", command=self.editar_categorias,
+                   cursor="hand2").pack(side="right", padx=8)
+        ttk.Button(bot, text="Clasificadas", style="Verde.TButton", command=self.abrir_clasificadas,
+                   cursor="hand2").pack(side="right", padx=(8, 0))
 
         # Registro
         reg = self._tarjeta(cuerpo)
@@ -362,6 +367,21 @@ class Ventana:
     def abrir_excel(self) -> None:
         if self.excel:
             abrir(self.excel)
+
+    def editar_categorias(self) -> None:
+        """Abre categorias.txt en el Bloc de notas; al guardarlo, el programa reclasifica solo."""
+        ruta = asegurar_archivo()
+        if sys.platform == "win32":
+            subprocess.Popen(["notepad.exe", str(ruta)])
+        else:
+            abrir(ruta)
+
+    def abrir_clasificadas(self) -> None:
+        if not self.carpeta:
+            return
+        destino = self.carpeta / CARPETA_CLASIFICADAS
+        destino.mkdir(exist_ok=True)
+        abrir(destino)
 
     def revisar_ahora(self) -> None:
         self.detener.revisar_ya = True

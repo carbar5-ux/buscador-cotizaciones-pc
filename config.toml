@@ -49,3 +49,7 @@ token_github = ''
 # El lector de tablas (lento) revisa solo las primeras N páginas de cada PDF; el texto de
 # todas las páginas se lee siempre. Evita que catálogos de cientos de páginas tarden minutos. 0 = sin límite
 max_paginas_tablas = 10
+
+# Clasificar cotizaciones por categoría y copiarlas a <carpeta>/Clasificadas/<Categoría>/
+# Las categorías y sus palabras clave se editan en categorias.txt (botón "Categorías" de la ventana)
+clasificar = true

@@ -68,6 +68,22 @@ def _hoja(wb: Workbook, titulo: str, columnas: list[tuple[str, int, str | None]]
     return ws
 
 
+AZUL_LINK = Font(color="0563C1", underline="single")
+AZUL_BOTON = Font(color="0563C1", underline="single", bold=True)
+
+
+def _vincular(ws, fila: int, col: int, ruta: Path, texto: str, fuente: Font = AZUL_LINK) -> None:
+    """Celda que abre el PDF con un clic (fórmula HIPERVINCULO: funciona con espacios, tildes y subcarpetas)."""
+    celda = ws.cell(fila, col)
+    destino = str(ruta)
+    if len(destino) <= 250 and len(texto) <= 250:
+        celda.value = '=HYPERLINK("{}","{}")'.format(destino.replace('"', ""), texto.replace('"', '""'))
+    else:  # ruta muy larga para una fórmula: vínculo directo
+        celda.value = texto
+        celda.hyperlink = destino
+    celda.font = fuente
+
+
 def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_aviso: int = 7) -> None:
     hoy = date.today()
     cotizaciones: list[tuple[str, Cotizacion, dict]] = []
@@ -80,7 +96,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
 
     # ---------------- Hoja Cotizaciones ----------------
     col_cot = [
-        ("ID", 8, None), ("Archivo", 34, None), ("Carpeta", 22, None), ("Proveedor", 32, None),
+        ("ID", 8, None), ("PDF", 11, None), ("Archivo", 34, None), ("Carpeta", 22, None), ("Proveedor", 32, None),
         ("RUT proveedor", 14, None), ("Cliente", 26, None), ("N° cotización", 14, None),
         ("Fecha", 12, FMT_FECHA), ("Validez", 18, None), ("Vence", 12, FMT_FECHA), ("Estado", 12, None),
         ("Moneda", 8, None), ("Neto", 15, "moneda"), ("Descuento", 13, "moneda"), ("IVA", 13, "moneda"),
@@ -88,6 +104,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         ("Forma de pago", 22, None), ("Plazo de entrega", 22, None), ("Lugar de entrega", 22, None),
         ("Contacto", 22, None), ("Email", 26, None), ("Teléfono", 16, None), ("Páginas", 8, None),
         ("Lectura", 10, None), ("Observaciones", 50, None), ("Procesado", 17, "dd-mm-yyyy hh:mm"),
+        ("Categorías", 30, None),
     ]
     filas_cot, ids = [], {}
     for n, (clave, c, reg) in enumerate(cotizaciones, start=1):
@@ -97,49 +114,53 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         suma = sum(i.total for i in c.items if i.total is not None) if c.items else None
         rel = Path(clave)
         filas_cot.append([
-            n, rel.name, str(rel.parent) if str(rel.parent) != "." else "", c.proveedor, c.rut_proveedor, c.cliente,
+            n, "Abrir PDF", rel.name, str(rel.parent) if str(rel.parent) != "." else "", c.proveedor, c.rut_proveedor,
+            c.cliente,
             c.numero, _fecha(c.fecha), c.validez, vence, estado, c.moneda, c.neto, c.descuento, c.iva, c.total,
             suma, len(c.items), c.forma_pago, c.plazo_entrega, c.lugar_entrega, c.contacto, c.email, c.telefono,
             c.paginas, c.metodo, "; ".join(c.observaciones), datetime.fromisoformat(reg["procesado"]),
+            ", ".join(c.categorias),
         ])
     ws = _hoja(wb, "Cotizaciones", col_cot, filas_cot, "TablaCotizaciones")
     for r, (clave, c, _) in enumerate(cotizaciones, start=2):
-        celda = ws.cell(r, 2)
-        celda.hyperlink = (carpeta / clave).as_uri()
-        celda.font = Font(color="0563C1", underline="single")
+        _vincular(ws, r, 2, carpeta / clave, "Abrir PDF", AZUL_BOTON)
+        _vincular(ws, r, 3, carpeta / clave, Path(clave).name)
         fmt = _fmt_moneda(c.moneda)
-        for col in (13, 14, 15, 16, 17):
+        for col in (14, 15, 16, 17, 18):
             ws.cell(r, col).number_format = fmt
-        estado = ws.cell(r, 11)
+        estado = ws.cell(r, 12)
         estado.fill = {"Vencida": ROJO, "Por vencer": AMARILLO, "Vigente": VERDE}.get(estado.value, PatternFill())
         if c.observaciones:
-            ws.cell(r, 27).fill = AMARILLO
+            ws.cell(r, 28).fill = AMARILLO
 
     # ---------------- Hoja Ítems ----------------
     col_it = [
-        ("ID cot.", 8, None), ("Proveedor", 28, None), ("RUT proveedor", 14, None), ("N° cotización", 13, None),
-        ("Fecha", 12, FMT_FECHA), ("Moneda", 8, None), ("Ítem", 6, None), ("Código", 14, None),
+        ("ID cot.", 8, None), ("PDF", 11, None), ("Proveedor", 28, None), ("RUT proveedor", 14, None),
+        ("N° cotización", 13, None), ("Fecha", 12, FMT_FECHA), ("Moneda", 8, None), ("Ítem", 6, None), ("Código", 14, None),
         ("Descripción", 55, None), ("Cantidad", 11, FMT_DECIMAL), ("Unidad", 8, None),
         ("Precio unitario", 15, "moneda"), ("Descuento", 10, FMT_DECIMAL), ("Total línea", 15, "moneda"),
-        ("Control", 26, None), ("Página", 7, None), ("Archivo", 34, None),
+        ("Control", 26, None), ("Página", 7, None), ("Archivo", 34, None), ("Categoría", 24, None),
     ]
-    filas_it, fmts_it = [], []
+    filas_it, fmts_it, claves_it = [], [], []
     for clave, c, _ in cotizaciones:
         for it in c.items:
+            claves_it.append(clave)
             filas_it.append([
-                ids[clave], c.proveedor, c.rut_proveedor, c.numero, _fecha(c.fecha), c.moneda, it.item, it.codigo,
+                ids[clave], "Abrir PDF", c.proveedor, c.rut_proveedor, c.numero, _fecha(c.fecha), c.moneda, it.item, it.codigo,
                 it.descripcion, it.cantidad, it.unidad, it.precio_unitario, it.descuento, it.total, it.control,
-                it.pagina, Path(clave).name,
+                it.pagina, Path(clave).name, it.categoria,
             ])
             fmts_it.append(_fmt_moneda(c.moneda))
     ws = _hoja(wb, "Ítems", col_it, filas_it, "TablaItems")
-    for r, fmt in enumerate(fmts_it, start=2):
-        ws.cell(r, 12).number_format = fmt
-        ws.cell(r, 14).number_format = fmt
-        ws.cell(r, 9).alignment = Alignment(wrap_text=True, vertical="top")
+    for r, (fmt, clave) in enumerate(zip(fmts_it, claves_it), start=2):
+        _vincular(ws, r, 2, carpeta / clave, "Abrir PDF", AZUL_BOTON)
+        _vincular(ws, r, 18, carpeta / clave, Path(clave).name)
+        ws.cell(r, 13).number_format = fmt
+        ws.cell(r, 15).number_format = fmt
+        ws.cell(r, 10).alignment = Alignment(wrap_text=True, vertical="top")
     if filas_it:
         ws.conditional_formatting.add(
-            f"O2:O{len(filas_it) + 1}", FormulaRule(formula=['LEFT(O2,7)="Revisar"'], fill=AMARILLO)
+            f"P2:P{len(filas_it) + 1}", FormulaRule(formula=['LEFT(P2,7)="Revisar"'], fill=AMARILLO)
         )
 
     # ---------------- Hoja Comparativo de precios ----------------
@@ -150,7 +171,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
                 continue
             # por descripción: los códigos cambian de un proveedor a otro
             clave_g = (normalizar(it.descripcion), normalizar(it.unidad), c.moneda)
-            grupos[clave_g].append((it, c))
+            grupos[clave_g].append((it, c, clave))
     col_cmp = [
         ("Descripción", 55, None), ("Códigos", 16, None), ("Unidad", 8, None), ("Moneda", 8, None),
         ("N° cotizaciones", 11, FMT_ENTERO), ("N° proveedores", 11, FMT_ENTERO),
@@ -159,8 +180,9 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         ("Mediana", 15, "moneda"), ("Dif. máx/mín", 11, FMT_PCT), ("Último precio", 15, "moneda"),
         ("Último proveedor", 28, None), ("Fecha último", 12, FMT_FECHA), ("Ahorro vs último", 11, FMT_PCT),
     ]
-    filas_cmp, fmts_cmp = [], []
-    for (_, unidad, moneda), lista in grupos.items():
+    filas_cmp, fmts_cmp, links_cmp = [], [], []
+    for (_, unidad, moneda), lista3 in grupos.items():
+        lista = [(it, c) for it, c, _ in lista3]
         precios = [it.precio_unitario for it, _ in lista]
         mn = min(lista, key=lambda t: t[0].precio_unitario)
         mx = max(lista, key=lambda t: t[0].precio_unitario)
@@ -174,13 +196,19 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
             _fecha(ult[1].fecha), (1 - p_min / p_ult) if p_ult else None,
         ])
         fmts_cmp.append(_fmt_moneda(moneda))
+        clave_de = {id(t[1]): t[2] for t in lista3}
+        links_cmp.append((clave_de[id(mn[1])], clave_de[id(mx[1])], clave_de[id(ult[1])]))
     orden = sorted(range(len(filas_cmp)), key=lambda i: (-filas_cmp[i][5], -filas_cmp[i][4], filas_cmp[i][0]))
     filas_cmp = [filas_cmp[i] for i in orden]
     fmts_cmp = [fmts_cmp[i] for i in orden]
+    links_cmp = [links_cmp[i] for i in orden]
     ws = _hoja(wb, "Comparativo", col_cmp, filas_cmp, "TablaComparativo")
-    for r, fmt in enumerate(fmts_cmp, start=2):
+    for r, (fmt, (k_min, k_max, k_ult)) in enumerate(zip(fmts_cmp, links_cmp), start=2):
         for col in (7, 10, 12, 13, 15):
             ws.cell(r, col).number_format = fmt
+        # clic en el proveedor = abre su cotización
+        for col, k in ((8, k_min), (11, k_max), (16, k_ult)):
+            _vincular(ws, r, col, carpeta / k, str(ws.cell(r, col).value or Path(k).name))
     if filas_cmp:
         ws.conditional_formatting.add(
             f"N2:N{len(filas_cmp) + 1}", CellIsRule(operator="greaterThan", formula=["0.2"], fill=AMARILLO)
@@ -216,21 +244,26 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     _hoja(wb, "Proveedores", col_prov, filas_prov, "TablaProveedores")
 
     # ---------------- Hoja Revisar ----------------
-    filas_rev = []
+    filas_rev, claves_rev = [], []
     for clave, c, _ in cotizaciones:
         for obs in c.observaciones:
             filas_rev.append([ids[clave], Path(clave).name, c.proveedor, obs])
+            claves_rev.append(clave)
         n_rev = sum(1 for i in c.items if i.control.startswith("Revisar"))
         if n_rev:
             filas_rev.append([ids[clave], Path(clave).name, c.proveedor, f"{n_rev} línea(s) donde cantidad × precio ≠ total"])
+            claves_rev.append(clave)
     vistos: dict[str, str] = {}
     for clave, _, reg in cotizaciones:
         if reg["hash"] in vistos:
             filas_rev.append([ids[clave], Path(clave).name, "", f"Archivo duplicado de {vistos[reg['hash']]}"])
+            claves_rev.append(clave)
         else:
             vistos[reg["hash"]] = clave
-    _hoja(wb, "Revisar", [("ID cot.", 8, None), ("Archivo", 36, None), ("Proveedor", 30, None), ("Observación", 70, None)],
-          filas_rev, "TablaRevisar")
+    ws = _hoja(wb, "Revisar", [("ID cot.", 8, None), ("Archivo", 36, None), ("Proveedor", 30, None),
+                               ("Observación", 70, None)], filas_rev, "TablaRevisar")
+    for r, clave in enumerate(claves_rev, start=2):
+        _vincular(ws, r, 2, carpeta / clave, Path(clave).name)
 
     # ---------------- Hoja Resumen (primera) ----------------
     ws = wb.create_sheet("Resumen", 0)
@@ -241,7 +274,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     ws["A2"] = f"Carpeta: {carpeta}"
     ws["A3"] = f"Actualizado: {datetime.now():%d-%m-%Y %H:%M}"
     ws["A2"].font = ws["A3"].font = Font(italic=True, color="666666")
-    estados = [f[10] for f in filas_cot]
+    estados = [f[11] for f in filas_cot]
     total_clp = sum(c.total or 0 for _, c, _ in cotizaciones if c.moneda == "CLP")
     indicadores = [
         ("Cotizaciones leídas", len(cotizaciones), FMT_ENTERO),
@@ -261,6 +294,17 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         c.number_format = fmt
         c.font = Font(bold=True, size=12)
         c.border = borde
+    por_cat: dict[str, int] = defaultdict(int)
+    for _, c, _ in cotizaciones:
+        for cat in c.categorias:
+            por_cat[cat] += 1
+    if por_cat:
+        ws.cell(17, 1, "Cotizaciones por categoría").font = Font(bold=True, size=12, color=AZUL)
+        for i, (cat, n) in enumerate(sorted(por_cat.items(), key=lambda t: -t[1]), start=18):
+            ws.cell(i, 1, cat).border = borde
+            celda = ws.cell(i, 2, n)
+            celda.font = Font(bold=True)
+            celda.border = borde
     ws.cell(15, 1, "Hojas: Cotizaciones (1 fila por PDF) · Ítems (1 fila por línea) · Comparativo (precios por producto) "
                    "· Proveedores · Revisar (lo que conviene verificar a mano)").font = Font(color="666666")
 
