@@ -657,7 +657,7 @@ def items_desde_texto(paginas_texto: list[str], formato: str) -> list[Item]:
 # --------------------------------------------------------------------------
 
 
-def ocr_pdf(ruta: Path) -> list[str] | None:
+def ocr_pdf(ruta: Path, max_paginas: int = 0) -> list[str] | None:
     """Texto por página vía Tesseract. Devuelve None si no hay OCR disponible."""
     try:
         import pypdfium2 as pdfium
@@ -667,7 +667,9 @@ def ocr_pdf(ruta: Path) -> list[str] | None:
     try:
         doc = pdfium.PdfDocument(str(ruta))
         textos = []
-        for pagina in doc:
+        for n, pagina in enumerate(doc, start=1):
+            if max_paginas and n > max_paginas:
+                break
             imagen = pagina.render(scale=300 / 72).to_pil()
             try:
                 textos.append(pytesseract.image_to_string(imagen, lang="spa", config="--psm 6"))
@@ -767,7 +769,14 @@ def extraer_cotizacion(
     formato: str = "chile",
     dias_validez: int = 30,
     usar_ocr: bool = True,
+    max_paginas_tablas: int = 10,
 ) -> Cotizacion:
+    """Lee una cotización.
+
+    `max_paginas_tablas`: el lector de tablas (lento) solo revisa las primeras N páginas;
+    el texto de todas las páginas se lee siempre (rápido). 0 = sin límite. Evita que un
+    catálogo o ficha técnica de cientos de páginas tarde minutos.
+    """
     cot = Cotizacion(archivo=str(ruta))
     rapido = leer_rapido(ruta)
     if rapido is not None:
@@ -778,9 +787,11 @@ def extraer_cotizacion(
         con_lineas = set(range(1, len(paginas_texto) + 1))
     cot.paginas = len(paginas_texto)
     texto = "\n".join(paginas_texto)
+    if max_paginas_tablas and len(con_lineas) > 0:
+        con_lineas = {n for n in con_lineas if n <= max_paginas_tablas}
 
     if len(texto.strip()) < 40:
-        textos_ocr = ocr_pdf(ruta) if usar_ocr else None
+        textos_ocr = ocr_pdf(ruta, max_paginas_tablas) if usar_ocr else None
         if not textos_ocr:
             cot.metodo = "sin texto"
             cot.observaciones.append(
@@ -794,13 +805,21 @@ def extraer_cotizacion(
         cot.items = items_desde_texto(paginas_texto, formato)
     else:
         cot.items, cot.metodo = [], "tablas"
-        if con_lineas:  # el lector de tablas (lento) solo en páginas con líneas dibujadas
+        items_txt = items_desde_texto(paginas_texto, formato)
+        # Documento largo (catálogo, ficha técnica) cuyo texto ya trajo las líneas y casi todas cuadran
+        # (cantidad × precio = total): se omite el lector de tablas, que es lo más lento. En cotizaciones
+        # normales (hasta max_paginas_tablas páginas) siempre se usan las tablas: leen mejor las descripciones.
+        cuadran = sum(1 for i in items_txt if _cuadra(i.cantidad, i.precio_unitario, i.total, i.descuento))
+        largo = bool(max_paginas_tablas) and cot.paginas > max_paginas_tablas
+        texto_basta = largo and len(items_txt) >= 3 and cuadran >= 0.95 * len(items_txt)
+        if con_lineas and not texto_basta:  # el lector de tablas (lento) solo en páginas con líneas dibujadas
             with pdfplumber.open(ruta) as pdf:
                 cot.items = items_desde_tablas(pdf, formato, con_lineas)
-        items_txt = items_desde_texto(paginas_texto, formato)
         # usar texto si encontró más líneas consistentes que las tablas
         if len(items_txt) > len(cot.items):
             cot.items, cot.metodo = items_txt, "texto"
-    extraer_encabezado(cot, texto, mis_ruts or set(), formato, dias_validez)
+    # encabezado y totales: primeras 3 y últimas 2 páginas (en documentos largos no hace falta leer el resto)
+    texto_enc = texto if len(paginas_texto) <= 5 else "\n".join(paginas_texto[:3] + paginas_texto[-2:])
+    extraer_encabezado(cot, texto_enc, mis_ruts or set(), formato, dias_validez)
     controlar(cot)
     return cot

@@ -93,8 +93,6 @@ class Ventana:
         self.excel = None
 
         raiz.title("Buscador de cotizaciones — Carlos")
-        raiz.geometry("860x640")
-        raiz.minsize(720, 560)
         raiz.configure(bg=FONDO)
         try:
             raiz.iconbitmap(str(BASE / "icono_cotizaciones.ico"))
@@ -103,6 +101,7 @@ class Ventana:
         raiz.protocol("WM_DELETE_WINDOW", self.cerrar)
         self._estilos()
         self._armar()
+        self._ajustar_tamano()
 
         if self.carpeta is None or not self.carpeta.is_dir():
             raiz.after(300, self.primera_carpeta)
@@ -112,6 +111,16 @@ class Ventana:
             raiz.iconify()
         raiz.after(100, self.procesar_cola)
         raiz.after(500, self.atender_candado)
+
+    def _ajustar_tamano(self) -> None:
+        """Tamaño según lo que ocupa el contenido y la pantalla (con letra agrandada en Windows no se corta)."""
+        r = self.raiz
+        r.update_idletasks()
+        ancho_p, alto_p = r.winfo_screenwidth(), r.winfo_screenheight()
+        ancho = min(max(r.winfo_reqwidth(), int(ancho_p * 0.55)), int(ancho_p * 0.92))
+        alto = min(r.winfo_reqheight() + 20, int(alto_p * 0.88))
+        r.geometry(f"{ancho}x{alto}+{(ancho_p - ancho) // 2}+{max(0, (alto_p - alto) // 3)}")
+        r.minsize(min(ancho, int(ancho_p * 0.5)), min(alto, int(alto_p * 0.6)))
 
     # ---------------- aspecto ----------------
     def _estilos(self) -> None:
@@ -217,7 +226,7 @@ class Ventana:
         # Registro
         reg = self._tarjeta(cuerpo)
         reg.pack(fill="both", expand=True)
-        self.txt = tk.Text(reg, height=6, bg=TARJETA, fg=GRIS, font=("Consolas", 9), relief="flat",
+        self.txt = tk.Text(reg, height=4, bg=TARJETA, fg=GRIS, font=("Consolas", 9), relief="flat",
                            wrap="none", state="disabled", padx=10, pady=8)
         self.txt.pack(fill="both", expand=True)
         self.txt.tag_configure("aviso", foreground=AMARILLO)
