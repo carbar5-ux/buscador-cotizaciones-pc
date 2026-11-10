@@ -24,7 +24,7 @@ BASE = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE))
 
 import consola  # noqa: E402
-from actualizador import reiniciar, version_local  # noqa: E402
+from actualizador import consultar, instalar, reiniciar, version_local  # noqa: E402
 import correo  # noqa: E402
 import migracion  # noqa: E402
 from agrupador import (agrupar, calza_preparado, descripcion_representativa, preparar,  # noqa: E402
@@ -246,6 +246,9 @@ class Ventana:
                    command=lambda: self.carpeta and abrir(self.carpeta), cursor="hand2").pack(side="left", padx=8)
         ttk.Button(bot, text="Revisar ahora", style="Gris.TButton", command=self.revisar_ahora,
                    cursor="hand2").pack(side="left")
+        self.btn_actualizar = ttk.Button(bot, text="Actualizar", style="Gris.TButton", command=self.actualizar,
+                                         cursor="hand2")
+        self.btn_actualizar.pack(side="left", padx=(8, 0))
         ttk.Button(bot, text="Manual", style="Gris.TButton", command=lambda: abrir(BASE / "Manual_de_uso.pdf"),
                    cursor="hand2").pack(side="right")
         ttk.Button(bot, text="Categorías", style="Gris.TButton", command=self.editar_categorias,
@@ -572,6 +575,69 @@ class Ventana:
         boton.pack(side="left")
         ttk.Button(bots, text="Desactivar", style="Gris.TButton", command=desactivar).pack(side="left", padx=8)
         ttk.Button(bots, text="Cerrar", style="Gris.TButton", command=top.destroy).pack(side="left")
+
+    def actualizar(self) -> None:
+        """Botón Actualizar: busca una versión nueva en GitHub y, si el usuario quiere, la instala y reinicia."""
+        self.btn_actualizar.state(["disabled"])
+        self.btn_actualizar.config(text="Buscando…")
+        token = str(self.cfg.get("token_github") or "").strip()
+        resultado: dict = {}
+
+        def en_hilo(tarea) -> None:
+            try:
+                resultado["r"] = tarea()
+            except Exception as e:  # nunca botar la ventana por esto
+                resultado["r"] = ("error", f"No se pudo actualizar: {e}")
+
+        def esperar(siguiente) -> None:
+            if "r" not in resultado:
+                self.raiz.after(200, lambda: esperar(siguiente))
+            else:
+                siguiente(resultado.pop("r"))
+
+        def listo() -> None:
+            self.btn_actualizar.state(["!disabled"])
+            self.btn_actualizar.config(text="Actualizar")
+
+        def al_consultar(r) -> None:
+            estado, dato = r
+            if estado == "error":
+                listo()
+                messagebox.showwarning("Actualizar", dato, parent=self.raiz)
+                return
+            if estado == "al_dia":
+                listo()
+                messagebox.showinfo("Actualizar", f"Ya tienes la última versión ({dato}).", parent=self.raiz)
+                return
+            leyendo = self.lbl_estado.cget("text").startswith("Leyendo")
+            pregunta = (f"Hay una versión nueva: {dato} (tienes la {version_local()}).\n\n¿Actualizar ahora? "
+                        "El programa se cierra y se vuelve a abrir solo. Tu configuración, el Excel y las "
+                        "cotizaciones no se tocan.")
+            if leyendo:
+                pregunta += "\n\nEstá leyendo cotizaciones: lo leído hasta ahora queda guardado y sigue al volver a abrir."
+            if not messagebox.askyesno("Actualizar", pregunta, parent=self.raiz):
+                listo()
+                return
+            self.btn_actualizar.config(text="Actualizando…")
+            self.lbl_estado.config(text="Actualizando el programa…", fg=TEXTO)
+            log.info("Actualizando a la versión %s (botón Actualizar)...", dato)
+            threading.Thread(target=en_hilo, args=(lambda: ("ok", instalar(token)),), daemon=True).start()
+            esperar(al_instalar)
+
+        def al_instalar(r) -> None:
+            estado, dato = r
+            if estado == "ok" and dato:
+                log.info("Actualizado a la versión %s. Reiniciando...", version_local())
+                self.detener.set()
+                self.raiz.after(800, reiniciar)  # da un momento al motor para soltar los archivos
+                return
+            listo()
+            messagebox.showwarning("Actualizar", dato if estado == "error" else
+                                   "No se pudo descargar la actualización. Revisa la conexión e inténtalo otra vez.",
+                                   parent=self.raiz)
+
+        threading.Thread(target=en_hilo, args=(lambda: consultar(token),), daemon=True).start()
+        esperar(al_consultar)
 
     def revisar_ahora(self) -> None:
         self.detener.revisar_ya = True

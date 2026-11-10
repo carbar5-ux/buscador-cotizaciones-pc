@@ -60,21 +60,29 @@ def _clave_version(v: str) -> tuple:
     return tuple(int(p) if p.isdigit() else 0 for p in v.replace("-", ".").split("."))
 
 
-def buscar_actualizacion(token: str) -> str | None:
-    """Devuelve la versión nueva disponible, o None si no hay (o no se pudo revisar)."""
+def consultar(token: str) -> tuple[str, str]:
+    """("nueva", versión) si hay una versión nueva, ("al_dia", versión instalada) si no, o ("error", motivo)."""
     try:
         remota = version_remota(token)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403, 404):
-            log.warning("No se pudo buscar actualizaciones (el repositorio es privado o la clave no sirve). "
-                        "Revisa 'token_github' en config.toml o el README.")
-        else:
-            log.info("No se pudo buscar actualizaciones (GitHub respondió %s).", e.code)
-        return None
+            return "error", ("No se pudo buscar actualizaciones (el repositorio es privado o la clave no sirve). "
+                             "Revisa 'token_github' en config.toml o el README.")
+        return "error", f"No se pudo buscar actualizaciones (GitHub respondió {e.code})."
     except (urllib.error.URLError, TimeoutError, OSError):
-        log.info("Sin conexión: no se buscaron actualizaciones.")
+        return "error", "Sin conexión a internet: no se pudo buscar actualizaciones."
+    if _clave_version(remota) > _clave_version(version_local()):
+        return "nueva", remota
+    return "al_dia", version_local()
+
+
+def buscar_actualizacion(token: str) -> str | None:
+    """Devuelve la versión nueva disponible, o None si no hay (o no se pudo revisar)."""
+    estado, dato = consultar(token)
+    if estado == "error":
+        (log.warning if "privado" in dato else log.info)(dato)
         return None
-    return remota if _clave_version(remota) > _clave_version(version_local()) else None
+    return dato if estado == "nueva" else None
 
 
 def instalar(token: str) -> bool:
