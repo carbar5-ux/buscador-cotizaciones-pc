@@ -699,8 +699,8 @@ class Planilla:
 
     COLUMNAS = (("descripcion", "Descripción", 320, "w"), ("precio", "Precio unitario", 115, "e"),
                 ("var", "Var.", 62, "e"), ("cantidad", "Cantidad", 75, "e"), ("unidad", "Unidad", 60, "center"), ("total", "Total", 115, "e"),
-                ("proveedor", "Empresa", 190, "w"), ("fecha", "Fecha", 95, "center"), ("numero", "N° cot.", 80, "w"),
-                ("categoria", "Categoría", 130, "w"))
+                ("proveedor", "Empresa", 190, "w"), ("origen", "Origen", 80, "center"), ("fecha", "Fecha", 95, "center"),
+                ("numero", "N° cot.", 80, "w"), ("categoria", "Categoría", 130, "w"))
     MAXIMO = 3000  # filas dibujadas a la vez (con más, la tabla se pone lenta: se pide filtrar)
     TODAS = "(todas)"
 
@@ -724,7 +724,7 @@ class Planilla:
         fb.pack(fill="x", padx=14, pady=(12, 0), before=f)
         tk.Label(fb, text="Buscar suministro (descripción o código):", bg=FONDO, fg=TEXTO,
                  font=(FUENTE, 11, "bold")).pack(side="left")
-        self.txt = tk.Entry(fb, font=(FUENTE, 13), width=40)
+        self.txt = tk.Entry(fb, font=(FUENTE, 13), width=18)
         self.txt.insert(0, texto)
         self.txt.pack(side="left", padx=8, ipady=4, fill="x", expand=True)
         self.txt.bind("<KeyRelease>", lambda e: self._programar())
@@ -735,21 +735,24 @@ class Planilla:
         self.cb_empresa = self._combo(f, "Empresa", [self.TODAS] + empresas, 0, 26)
         self.cb_cat = self._combo(f, "Categoría", [self.TODAS] + cats + ["(sin categoría)"], 1, 18)
         self.cb_moneda = self._combo(f, "Moneda", [self.TODAS] + monedas, 2, 8)
+        self.cb_origen = self._combo(f, "Origen", [self.TODAS, "Correo", "PC"], 3, 8)
         etiqueta_d = tk.Label(f, text="Fecha desde / hasta (dd-mm-aaaa)", bg=FONDO, fg=GRIS, font=(FUENTE, 9, "bold"))
-        etiqueta_d.grid(row=0, column=3, columnspan=2, sticky="w")
+        etiqueta_d.grid(row=0, column=4, columnspan=2, sticky="w")
         self.txt_desde = tk.Entry(f, font=(FUENTE, 11), width=11)
         self.txt_hasta = tk.Entry(f, font=(FUENTE, 11), width=11)
-        self.txt_desde.grid(row=1, column=3, padx=(0, 4), ipady=3)
-        self.txt_hasta.grid(row=1, column=4, padx=(0, 10), ipady=3)
+        self.txt_desde.grid(row=1, column=4, padx=(0, 4), ipady=3)
+        self.txt_hasta.grid(row=1, column=5, padx=(0, 10), ipady=3)
         for e in (self.txt_desde, self.txt_hasta):
             e.bind("<KeyRelease>", lambda ev: self._programar())
-        ttk.Button(f, text="Limpiar filtros", style="Gris.TButton", command=self.limpiar).grid(row=1, column=5, padx=4)
-        ttk.Button(f, text="Exportar a Excel", style="Verde.TButton", command=self.exportar).grid(row=1, column=6)
-        ttk.Button(f, text="Exportar a PDF", style="Verde.TButton", command=self.exportar_pdf).grid(row=1, column=7,
-                                                                                                  padx=4)
+        ttk.Button(f, text="Limpiar filtros", style="Gris.TButton", command=self.limpiar).grid(row=1, column=6, padx=4)
+
         # el historial va junto al buscador (siempre a la vista)
         ttk.Button(fb, text="Historial de precios", style="Naranjo.TButton", command=self.historial).pack(
             side="right", padx=(8, 0))
+        ttk.Button(fb, text="Exportar a PDF", style="Verde.TButton", command=self.exportar_pdf).pack(side="right",
+                                                                                                   padx=(8, 0))
+        ttk.Button(fb, text="Exportar a Excel", style="Verde.TButton", command=self.exportar).pack(side="right",
+                                                                                                 padx=(8, 0))
 
         self.lbl_resumen = tk.Label(self.top, text="", bg=FONDO, fg=TEXTO, font=(FUENTE, 11, "bold"), anchor="w",
                                     justify="left", wraplength=1150)
@@ -776,6 +779,7 @@ class Planilla:
         self.tabla.tag_configure("barato", background="#DCFCE7")
         self.tabla.tag_configure("par", background="#F9FAFB")
         self.tabla.tag_configure("alza", background="#FEE2E2", foreground="#9C0006")
+        self.tabla.tag_configure("correo", foreground="#1D4ED8")  # llegó por correo: letra azul
         self.tabla.bind("<Double-1>", self.abrir_pdf)
         st = ttk.Style(self.top)
         st.configure("Treeview", font=(FUENTE, 10), rowheight=26)
@@ -815,7 +819,7 @@ class Planilla:
     def limpiar(self) -> None:
         for e in (self.txt, self.txt_desde, self.txt_hasta):
             e.delete(0, "end")
-        for cb in (self.cb_empresa, self.cb_cat, self.cb_moneda):
+        for cb in (self.cb_empresa, self.cb_cat, self.cb_moneda, self.cb_origen):
             cb.set(self.TODAS)
         self.orden = ("fecha", True)
         self.aplicar()
@@ -830,6 +834,7 @@ class Planilla:
         texto = self.txt.get().strip()
         q = preparar_consulta(texto) if texto else None
         empresa, cat, moneda = self.cb_empresa.get(), self.cb_cat.get(), self.cb_moneda.get()
+        origen_q = self.cb_origen.get()
         desde, hasta = self._iso(self.txt_desde.get()), self._iso(self.txt_hasta.get())
         filas = []
         for prep, it, d, clave in self.app._indice_precios():
@@ -838,6 +843,8 @@ class Planilla:
             if empresa != self.TODAS and d.get("proveedor") != empresa:
                 continue
             if moneda != self.TODAS and d.get("moneda") != moneda:
+                continue
+            if origen_q != self.TODAS and correo.origen(clave) != origen_q:
                 continue
             if cat != self.TODAS:
                 cats_it = it.get("categoria") or ""
@@ -860,6 +867,7 @@ class Planilla:
             "fecha": lambda t: t[1].get("fecha") or "",
             "numero": lambda t: str(t[1].get("numero") or ""),
             "categoria": lambda t: t[0].get("categoria") or "",
+            "origen": lambda t: correo.origen(t[2]),
         }
         filas.sort(key=claves_orden[col], reverse=rev)
         var_precio = self.app.var_precio
@@ -886,13 +894,16 @@ class Planilla:
                          and id(filas[n]) in ids_principal)
             var = var_precio.get(id(it))
             alza = var is not None and var[0] >= 0.005
+            de_correo = correo.es_de_correo(clave)
             tag = ("barato",) if es_barato else ("alza",) if alza else (("par",) if n % 2 else ())
+            if de_correo and not alza:
+                tag += ("correo",)
             iid = self.tabla.insert("", "end", tags=tag, values=(
                 it.get("descripcion", ""), _dinero(it.get("precio_unitario"), mon),
                 f"{var[0]:+.0%}" if var is not None else "",
                 f"{it['cantidad']:g}" if it.get("cantidad") is not None else "", it.get("unidad", ""),
-                _dinero(it.get("total"), mon), d.get("proveedor", ""), _fecha_txt(d.get("fecha", "")),
-                d.get("numero", ""), it.get("categoria", "")))
+                _dinero(it.get("total"), mon), d.get("proveedor", ""), "✉ Correo" if de_correo else "PC",
+                _fecha_txt(d.get("fecha", "")), d.get("numero", ""), it.get("categoria", "")))
             self.claves[iid] = clave
         self._resumen(filas, bool(q))
 
@@ -905,7 +916,9 @@ class Planilla:
         for it, d, _ in filas:
             if it.get("total") is not None:
                 totales[d.get("moneda", "")] = totales.get(d.get("moneda", ""), 0) + it["total"]
-        partes = [f"{len(filas):,} líneas de {n_cot:,} cotizaciones".replace(",", ".")]
+        n_correo = len({t[2] for t in filas if correo.es_de_correo(t[2])})
+        partes = [f"{len(filas):,} líneas de {n_cot:,} cotizaciones".replace(",", ".")
+                  + (f" ({n_correo} por correo)" if n_correo else "")]
         partes.append("suma de totales " + "  +  ".join(_dinero(v, m) for m, v in totales.items()))
         if len(filas) > self.MAXIMO:
             partes.append(f"se muestran las primeras {self.MAXIMO:,}: usa los filtros para acotar".replace(",", "."))
@@ -958,7 +971,8 @@ class Planilla:
         partes = []
         if self.txt.get().strip():
             partes.append(f"búsqueda \"{self.txt.get().strip()}\"")
-        for nombre, cb in (("empresa", self.cb_empresa), ("categoría", self.cb_cat), ("moneda", self.cb_moneda)):
+        for nombre, cb in (("empresa", self.cb_empresa), ("categoría", self.cb_cat), ("moneda", self.cb_moneda),
+                           ("origen", self.cb_origen)):
             if cb.get() != self.TODAS:
                 partes.append(f"{nombre} {cb.get()}")
         if self.txt_desde.get().strip() or self.txt_hasta.get().strip():
@@ -1004,19 +1018,19 @@ class Planilla:
         ws = wb.active
         ws.title = "Precios"
         ws.append(["Descripción", "Precio unitario", "Cantidad", "Unidad", "Total", "Moneda", "Empresa", "Fecha",
-                   "N° cotización", "Categoría", "Archivo"])
+                   "N° cotización", "Categoría", "Origen", "Archivo"])
         for it, d, clave in self.visibles:
             f = d.get("fecha") or ""
             ws.append([limpiar_texto(v) for v in [it.get("descripcion"), it.get("precio_unitario"), it.get("cantidad"), it.get("unidad"),
                        it.get("total"), d.get("moneda"), d.get("proveedor"),
                        datetime.date.fromisoformat(f) if f else None, d.get("numero"), it.get("categoria"),
-                       str(carpeta / clave)]])
-        for col, ancho in zip("ABCDEFGHIJK", (60, 15, 10, 8, 15, 8, 30, 12, 14, 20, 50)):
+                       correo.origen(clave), str(carpeta / clave)]])
+        for col, ancho in zip("ABCDEFGHIJKL", (60, 15, 10, 8, 15, 8, 30, 12, 14, 20, 10, 50)):
             ws.column_dimensions[col].width = ancho
         for fila in ws.iter_rows(min_row=2):
             fila[1].number_format = fila[4].number_format = "#,##0.##"
             fila[7].number_format = "dd-mm-yyyy"
-        tabla = Table(displayName="Filtrados", ref=f"A1:K{len(self.visibles) + 1}")
+        tabla = Table(displayName="Filtrados", ref=f"A1:L{len(self.visibles) + 1}")
         tabla.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
         ws.add_table(tabla)
         ws.freeze_panes = "A2"
@@ -1069,7 +1083,8 @@ class Historial:
         self.lienzo.bind("<Configure>", lambda e: self.dibujar())
 
         cols = (("fecha", "Fecha", 95, "center"), ("empresa", "Empresa", 260, "w"), ("precio", "Precio unitario", 120, "e"),
-                ("var", "Var.", 70, "e"), ("cantidad", "Cantidad", 80, "e"), ("numero", "N° cot.", 90, "w"))
+                ("var", "Var.", 70, "e"), ("cantidad", "Cantidad", 80, "e"), ("numero", "N° cot.", 90, "w"),
+                ("origen", "Origen", 75, "center"))
         marco = tk.Frame(self.top, bg=FONDO)
         marco.pack(fill="both", expand=False, padx=14, pady=10)
         self.tabla = ttk.Treeview(marco, columns=[c[0] for c in cols], show="headings", height=7)
@@ -1086,7 +1101,8 @@ class Historial:
             var = app.var_precio.get(id(t[1]))
             iid = self.tabla.insert("", "end", tags=("alza",) if var and var[0] >= 0.005 else (), values=(
                 _fecha_txt(f), prov, _dinero(precio, self.moneda), f"{var[0]:+.0%}" if var else "",
-                f"{t[1]['cantidad']:g}" if t[1].get("cantidad") is not None else "", t[2].get("numero", "")))
+                f"{t[1]['cantidad']:g}" if t[1].get("cantidad") is not None else "", t[2].get("numero", ""),
+                "✉ Correo" if correo.es_de_correo(t[3]) else "PC"))
             self.claves[iid] = t[3]
         self.tabla.bind("<Double-1>", self.abrir_pdf)
         tk.Label(self.top, text="Doble clic en una fila: abre la cotización", bg=FONDO, fg=GRIS,

@@ -12,6 +12,8 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, TableStyle
 
+from correo import origen
+
 VERDE_OSC = colors.HexColor("#0B6E3A")
 GRIS = colors.HexColor("#6B7280")
 ROJO_FONDO = colors.HexColor("#FEE2E2")
@@ -37,7 +39,7 @@ def precios_pdf(ruta: Path, filas: list, filtros: str, var_precio: dict | None =
     titulo = ParagraphStyle("titulo", fontName="Helvetica-Bold", fontSize=16, leading=19, textColor=VERDE_OSC)
     sub = ParagraphStyle("sub", fontName="Helvetica", fontSize=8.5, leading=11, textColor=GRIS)
 
-    encabezado = ["Descripción", "Precio unit.", "Var.", "Cantidad", "Unidad", "Total", "Empresa", "Fecha", "N° cot."]
+    encabezado = ["Descripción", "Precio unit.", "Var.", "Cantidad", "Unidad", "Total", "Empresa", "Fecha", "N° cot.", "Origen"]
     datos = [encabezado]
     estilo = [
         ("BACKGROUND", (0, 0), (-1, 0), VERDE_OSC), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -55,16 +57,18 @@ def precios_pdf(ruta: Path, filas: list, filtros: str, var_precio: dict | None =
             f"{var[0]:+.0%}" if var else "", f"{it['cantidad']:g}" if it.get("cantidad") is not None else "",
             str(it.get("unidad") or ""), _dinero(it.get("total"), mon),
             Paragraph(escape(str(d.get("proveedor") or "")), chico), _fecha(d.get("fecha") or ""),
-            str(d.get("numero") or ""),
+            str(d.get("numero") or ""), origen(_clave),
         ])
         if it.get("total") is not None:
             totales[mon] = totales.get(mon, 0) + it["total"]
+        if origen(_clave) == "Correo":
+            estilo.append(("TEXTCOLOR", (9, n), (9, n), colors.HexColor("#1D4ED8")))
         if var and var[0] >= 0.005:
             estilo += [("BACKGROUND", (2, n), (2, n), ROJO_FONDO), ("TEXTCOLOR", (2, n), (2, n), ROJO_TXT)]
         elif n % 2 == 0:
             estilo.append(("BACKGROUND", (0, n), (-1, n), colors.HexColor("#F9FAFB")))
 
-    anchos = [9.2 * cm, 2.3 * cm, 1.2 * cm, 1.6 * cm, 1.3 * cm, 2.5 * cm, 5.0 * cm, 1.9 * cm, 1.8 * cm]
+    anchos = [8.0 * cm, 2.3 * cm, 1.2 * cm, 1.6 * cm, 1.3 * cm, 2.5 * cm, 4.9 * cm, 1.9 * cm, 1.8 * cm, 1.3 * cm]
     tabla = LongTable(datos, colWidths=anchos, repeatRows=1)
     tabla.setStyle(TableStyle(estilo))
 

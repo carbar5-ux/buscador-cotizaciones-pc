@@ -23,6 +23,7 @@ from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.views import Pane, Selection
 
 from agrupador import agrupar, descripcion_representativa, variaciones
+from correo import origen
 from extractor import Cotizacion, normalizar
 
 AZUL = "0B6E3A"  # verde de la ventana del buscador (encabezados y títulos)
@@ -38,6 +39,7 @@ log = logging.getLogger("cotizaciones")
 ROJO = PatternFill("solid", fgColor="F8CBAD")
 AMARILLO = PatternFill("solid", fgColor="FFE699")
 VERDE = PatternFill("solid", fgColor="C6EFCE")
+AZUL_CORREO = PatternFill("solid", fgColor="DBEAFE")  # cotizaciones que llegaron por correo
 
 
 def _fecha(iso: str) -> date | None:
@@ -69,7 +71,7 @@ def _fmt_moneda(moneda: str) -> str:
 
 CENTRADAS = {"Fecha", "Unidad", "Moneda", "Estado", "Vence", "Ítem", "Página", "Páginas", "N° ítems", "ID", "ID cot.",
              "PDF", "Lectura", "N° cotizaciones", "N° proveedores", "N° variantes", "Fecha mínimo", "Fecha último",
-             "Última cotización", "Cantidad", "N° cotización"}
+             "Última cotización", "Cantidad", "N° cotización", "Origen"}
 
 
 # Caché de estilos: aplicar un estilo en openpyxl es lento (compara objetos); cada combinación se calcula
@@ -258,7 +260,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         ("Forma de pago", 22, None), ("Plazo de entrega", 22, None), ("Lugar de entrega", 22, None),
         ("Contacto", 22, None), ("Email", 26, None), ("Teléfono", 16, None), ("Páginas", 8, None),
         ("Lectura", 10, None), ("Observaciones", 50, None), ("Procesado", 17, "dd-mm-yyyy hh:mm"),
-        ("Categorías", 30, None),
+        ("Categorías", 30, None), ("Origen", 10, None),
     ]
     filas_cot, ids = [], {}
     for n, (clave, c, reg) in enumerate(cotizaciones, start=1):
@@ -273,7 +275,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
             c.numero, _fecha(c.fecha), c.validez, vence, estado, c.moneda, c.neto, c.descuento, c.iva, c.total,
             suma, len(c.items), c.forma_pago, c.plazo_entrega, c.lugar_entrega, c.contacto, c.email, c.telefono,
             c.paginas, c.metodo, "; ".join(c.observaciones), datetime.fromisoformat(reg["procesado"]),
-            ", ".join(c.categorias),
+            ", ".join(c.categorias), origen(clave),
         ])
     ws = _hoja(wb, "Cotizaciones", col_cot, filas_cot, "TablaCotizaciones")
     for r, (clave, c, _) in enumerate(cotizaciones, start=2):
@@ -286,6 +288,8 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         estado.fill = {"Vencida": ROJO, "Por vencer": AMARILLO, "Vigente": VERDE}.get(estado.value, PatternFill())
         if c.observaciones:
             ws.cell(r, 28).fill = AMARILLO
+        if origen(clave) == "Correo":
+            ws.cell(r, 31).fill = AZUL_CORREO
 
     # ---------------- Hoja Ítems ----------------
     col_it = [
@@ -459,6 +463,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         ("Por vencer", estados.count("Por vencer"), FMT_ENTERO, "D97706"),
         ("Vencidas", estados.count("Vencida"), FMT_ENTERO, "DC2626"),
         ("Por revisar", len(filas_rev), FMT_ENTERO, "DC2626"),
+        ("Llegaron por correo", sum(1 for k, _, _ in cotizaciones if origen(k) == "Correo"), FMT_ENTERO, "1D4ED8"),
         ("Alzas de precio", sum(1 for i in ultimo_de_grupo if i in var_item and var_item[i][0] >= ALZA_AVISO),
          FMT_ENTERO, "DC2626"),
     ]
@@ -501,7 +506,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         fila = fila + len(por_cat) + 2
     ws.cell(fila, 2, "Hojas").font = Font(name=FUENTE_XL, bold=True, size=13, color=VERDE_OSC)
     guia = [("Precios", "una fila por suministro: empresa, fecha, descripción, cantidad y precio (clic = abre el PDF); "
-                        "en rojo, los precios que subieron frente a la cotización anterior"),
+                        "en rojo, los precios que subieron frente a la cotización anterior; Origen: Correo (azul) o PC"),
             ("Cotizaciones", "una fila por PDF, con condiciones, totales y vigencia"),
             ("Ítems", "todas las líneas con todos sus datos"),
             ("Proveedores", "contacto y montos por proveedor"),
@@ -516,7 +521,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         ("Empresa", 32, None), ("Fecha", 12, FMT_FECHA), ("Descripción", 60, None), ("Cantidad", 11, FMT_DECIMAL),
         ("Unidad", 9, None), ("Precio unitario", 16, "moneda"), ("Var. vs anterior", 12, FMT_PCT),
         ("Precio anterior", 38, None), ("Total", 16, "moneda"), ("Moneda", 8, None),
-        ("N° cotización", 14, None), ("PDF", 11, None),
+        ("N° cotización", 14, None), ("Origen", 10, None), ("PDF", 11, None),
     ]
     filas_pre, extra_pre = [], []
     for clave, c, _ in cotizaciones:
@@ -527,7 +532,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
                 it_ant, c_ant, _ = v[1]
                 antes = f"{_miles(it_ant.precio_unitario)} · {c_ant.proveedor[:26]} · {_fecha_corta(c_ant.fecha)}"
             filas_pre.append([c.proveedor, _fecha(c.fecha), it.descripcion, it.cantidad, it.unidad, it.precio_unitario,
-                              v[0] if v else None, antes, it.total, c.moneda, c.numero, "Abrir PDF"])
+                              v[0] if v else None, antes, it.total, c.moneda, c.numero, origen(clave), "Abrir PDF"])
             extra_pre.append((clave, _fmt_moneda(c.moneda)))
     ws = _hoja(wb, "Precios", col_pre, filas_pre, "TablaPrecios", congelar="A2")
     wb.move_sheet(ws, offset=-(len(wb.sheetnames) - 1))  # primera hoja
@@ -537,7 +542,9 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         # clic en el suministro (descripción) = abre su cotización
         desc = str(ws.cell(r, 3).value or "").strip() or "(sin descripción)"
         _vincular(ws, r, 3, carpeta / clave, desc)
-        _vincular(ws, r, 12, carpeta / clave, "Abrir PDF", AZUL_BOTON)
+        _vincular(ws, r, 13, carpeta / clave, "Abrir PDF", AZUL_BOTON)
+        if ws.cell(r, 12).value == "Correo":
+            ws.cell(r, 12).fill = AZUL_CORREO
     if filas_pre:  # alza en rojo, baja en verde
         rango = f"G2:G{len(filas_pre) + 1}"
         ws.conditional_formatting.add(rango, CellIsRule(operator="greaterThan", formula=[str(ALZA_MARCA)], fill=ROJO,
