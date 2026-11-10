@@ -1,4 +1,6 @@
 pdfplumber>=0.11
 openpyxl>=3.1
+# Exportar a PDF lo filtrado en la Planilla
+reportlab>=4.0
 # Opcional: lectura de PDF escaneados (requiere además instalar Tesseract OCR)
 pytesseract>=0.3.10

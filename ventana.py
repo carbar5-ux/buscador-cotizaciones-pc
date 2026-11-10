@@ -25,11 +25,14 @@ sys.path.insert(0, str(BASE))
 
 import consola  # noqa: E402
 from actualizador import reiniciar, version_local  # noqa: E402
+import correo  # noqa: E402
+import migracion  # noqa: E402
 from agrupador import (agrupar, calza_preparado, descripcion_representativa, preparar,  # noqa: E402
-                       preparar_consulta, sinonimos, unidad_normal)
+                       preparar_consulta, sinonimos, unidad_normal, variaciones)
 from clasificador import CARPETA_CLASIFICADAS, asegurar_archivo  # noqa: E402
 from excel_writer import limpiar_texto  # noqa: E402
-from buscador_cotizaciones import candado_instancia, guardar_carpeta, leer_config, main  # noqa: E402
+from buscador_cotizaciones import (candado_instancia, guardar_carpeta, guardar_valores, leer_config,  # noqa: E402
+                                   main)
 from consola import _duracion  # noqa: E402
 
 # Colores
@@ -93,6 +96,8 @@ class Ventana:
         self.detener = threading.Event()
         self.compartido: dict = {}  # el motor deja aquí los datos (para el buscador de precios)
         self._indice: tuple[int, list] | None = None
+        self.var_precio: dict[int, tuple[float, tuple]] = {}
+        self.grupo_de: dict[int, list] = {}
         self.leidas_sesion = 0
         self.ultimo_avance = 0.0
 
@@ -247,6 +252,8 @@ class Ventana:
                    cursor="hand2").pack(side="right", padx=8)
         ttk.Button(bot, text="Clasificadas", style="Verde.TButton", command=self.abrir_clasificadas,
                    cursor="hand2").pack(side="right", padx=(8, 0))
+        ttk.Button(bot, text="Correo", style="Gris.TButton", command=self.configurar_correo,
+                   cursor="hand2").pack(side="right", padx=(8, 0))
 
         # Registro
         reg = self._tarjeta(cuerpo)
@@ -261,6 +268,24 @@ class Ventana:
 
     # ---------------- motor ----------------
     def primera_carpeta(self) -> None:
+        if (BASE / "python").is_dir():  # programa instalado: traer la configuración del programa anterior
+            self.lbl_estado.config(text="Buscando tu configuración anterior…")
+            self.raiz.update_idletasks()
+            try:
+                origen = migracion.traer_configuracion()
+            except Exception:
+                log.exception("No se pudo traer la configuración anterior")
+                origen = None
+            self.cfg = leer_config()
+            carpeta = Path(self.cfg["carpeta_cotizaciones"]) if self.cfg["carpeta_cotizaciones"] else None
+            if origen and carpeta and carpeta.is_dir():
+                messagebox.showinfo("Buscador de cotizaciones",
+                                    f"Se encontró el programa anterior en:\n{origen}\n\nSe copió tu configuración "
+                                    f"(carpeta de cotizaciones, categorías y sinónimos).\n\nCuando veas que todo "
+                                    f"funciona, puedes borrar esa carpeta y sus accesos directos antiguos.")
+                self.carpeta = carpeta
+                self.arrancar()
+                return
         messagebox.showinfo("Buscador de cotizaciones",
                             "Elige la carpeta donde guardas tus cotizaciones PDF.")
         elegida = filedialog.askdirectory(parent=self.raiz, title="Carpeta de cotizaciones PDF")
@@ -410,6 +435,12 @@ class Ventana:
                 if pu is None or not it.get("descripcion"):
                     continue
                 filas.append((preparar(it["descripcion"], it.get("codigo", ""), sin), it, d, clave))
+        # mismo producto en distintas cotizaciones: para el historial y para marcar alzas de precio
+        grupos = agrupar([(t[1]["descripcion"], t[1].get("unidad", ""), t[2].get("moneda", ""), t) for t in filas])
+        var = variaciones(grupos, fecha=lambda t: t[2].get("fecha") or "", precio=lambda t: t[1]["precio_unitario"],
+                          cotizacion=lambda t: t[3])
+        self.var_precio = {id(t[1]): var[id(t)] for g in grupos for t in g if id(t) in var}
+        self.grupo_de = {id(t[1]): g for g in grupos for t in g}
         self._indice = (firma, filas)
         return filas
 
@@ -443,6 +474,89 @@ class Ventana:
         destino = self.carpeta / CARPETA_CLASIFICADAS
         destino.mkdir(exist_ok=True)
         abrir(destino)
+
+    def configurar_correo(self) -> None:
+        """Datos del correo para bajar solas las cotizaciones que llegan como PDF adjunto."""
+        top = tk.Toplevel(self.raiz)
+        top.title("Cotizaciones por correo")
+        top.configure(bg=FONDO)
+        top.transient(self.raiz)
+        top.resizable(False, False)
+        tk.Label(top, text="Cotizaciones que llegan por correo", bg=FONDO, fg=VERDE_OSC,
+                 font=(FUENTE, 13, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 2))
+        tk.Label(top, justify="left", bg=FONDO, fg=GRIS, font=(FUENTE, 9), wraplength=470, text=(
+            "Cada 10 minutos el programa revisa tu correo y guarda en la carpeta \"Correo\" (dentro de tu carpeta de "
+            "cotizaciones) los PDF adjuntos cuyo asunto, remitente o archivo tenga alguna de las palabras. No borra "
+            "ni marca como leído ningún correo.\n\nGmail: usa una \"contraseña de aplicación\" (16 letras), no tu "
+            "clave normal. Se crea en myaccount.google.com/apppasswords (necesita la verificación en 2 pasos).")
+        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=16, pady=(0, 8))
+        campos = {}
+        for fila, (clave, titulo, valor, oculto) in enumerate((
+                ("correo_usuario", "Correo", self.cfg.get("correo_usuario", ""), False),
+                ("correo_clave", "Contraseña de aplicación", self.cfg.get("correo_clave", ""), True),
+                ("correo_servidor", "Servidor IMAP (vacío = automático)", self.cfg.get("correo_servidor", ""), False),
+                ("correo_palabras", "Palabras (separadas por coma)",
+                 ", ".join(self.cfg.get("correo_palabras", [])), False)), start=2):
+            tk.Label(top, text=titulo, bg=FONDO, fg=TEXTO, font=(FUENTE, 10)).grid(row=fila, column=0, sticky="w",
+                                                                                 padx=(16, 8), pady=3)
+            e = tk.Entry(top, font=(FUENTE, 11), width=34, show="•" if oculto else "")
+            e.insert(0, valor or "")
+            e.grid(row=fila, column=1, sticky="ew", padx=(0, 16), pady=3, ipady=2)
+            campos[clave] = e
+        estado = tk.Label(top, text=self.cfg.get("_correo_error", ""), bg=FONDO, fg=ROJO, font=(FUENTE, 9, "bold"),
+                          wraplength=470, justify="left")
+        estado.grid(row=6, column=0, columnspan=2, sticky="w", padx=16, pady=(6, 0))
+
+        def valores() -> dict:
+            return {"correo_usuario": campos["correo_usuario"].get().strip(),
+                    "correo_clave": campos["correo_clave"].get().strip(),
+                    "correo_servidor": campos["correo_servidor"].get().strip(),
+                    "correo_palabras": [p.strip() for p in campos["correo_palabras"].get().split(",") if p.strip()]}
+
+        resultado: dict = {}
+
+        def probar() -> None:
+            v = valores()
+            if not v["correo_usuario"] or not v["correo_clave"]:
+                estado.config(text="Escribe el correo y la contraseña de aplicación.", fg=ROJO)
+                return
+            estado.config(text="Probando la conexión…", fg=TEXTO)
+            boton.state(["disabled"])
+
+            def en_hilo() -> None:
+                try:
+                    resultado["ok"] = correo.probar(dict(self.cfg, **v))
+                except correo.ErrorCorreo as e:
+                    resultado["error"] = str(e)
+                except Exception as e:
+                    resultado["error"] = f"No se pudo conectar: {e}"
+            threading.Thread(target=en_hilo, daemon=True).start()
+            esperar(v)
+
+        def esperar(v: dict) -> None:
+            if not resultado:
+                top.after(200, lambda: esperar(v))
+                return
+            boton.state(["!disabled"])
+            if "error" in resultado:
+                estado.config(text=resultado.pop("error"), fg=ROJO)
+                return
+            guardar_valores(self.cfg, v)
+            self.cfg.pop("_correo_error", None)
+            self.detener.correo_ya = True  # el motor revisa el correo de inmediato
+            estado.config(text=resultado.pop("ok") + "\nGuardado: desde ahora revisa el correo solo.", fg=VERDE)
+
+        def desactivar() -> None:
+            guardar_valores(self.cfg, {"correo_usuario": "", "correo_clave": ""})
+            self.detener.correo_ya = True
+            top.destroy()
+
+        bots = tk.Frame(top, bg=FONDO)
+        bots.grid(row=7, column=0, columnspan=2, sticky="e", padx=16, pady=14)
+        boton = ttk.Button(bots, text="Probar y guardar", style="Verde.TButton", command=probar)
+        boton.pack(side="left")
+        ttk.Button(bots, text="Desactivar", style="Gris.TButton", command=desactivar).pack(side="left", padx=8)
+        ttk.Button(bots, text="Cerrar", style="Gris.TButton", command=top.destroy).pack(side="left")
 
     def revisar_ahora(self) -> None:
         self.detener.revisar_ya = True
@@ -499,7 +613,7 @@ class Planilla:
     """
 
     COLUMNAS = (("descripcion", "Descripción", 320, "w"), ("precio", "Precio unitario", 115, "e"),
-                ("cantidad", "Cantidad", 75, "e"), ("unidad", "Unidad", 60, "center"), ("total", "Total", 115, "e"),
+                ("var", "Var.", 62, "e"), ("cantidad", "Cantidad", 75, "e"), ("unidad", "Unidad", 60, "center"), ("total", "Total", 115, "e"),
                 ("proveedor", "Empresa", 190, "w"), ("fecha", "Fecha", 95, "center"), ("numero", "N° cot.", 80, "w"),
                 ("categoria", "Categoría", 130, "w"))
     MAXIMO = 3000  # filas dibujadas a la vez (con más, la tabla se pone lenta: se pide filtrar)
@@ -546,11 +660,17 @@ class Planilla:
             e.bind("<KeyRelease>", lambda ev: self._programar())
         ttk.Button(f, text="Limpiar filtros", style="Gris.TButton", command=self.limpiar).grid(row=1, column=5, padx=4)
         ttk.Button(f, text="Exportar a Excel", style="Verde.TButton", command=self.exportar).grid(row=1, column=6)
+        ttk.Button(f, text="Exportar a PDF", style="Verde.TButton", command=self.exportar_pdf).grid(row=1, column=7,
+                                                                                                  padx=4)
+        # el historial va junto al buscador (siempre a la vista)
+        ttk.Button(fb, text="Historial de precios", style="Naranjo.TButton", command=self.historial).pack(
+            side="right", padx=(8, 0))
 
         self.lbl_resumen = tk.Label(self.top, text="", bg=FONDO, fg=TEXTO, font=(FUENTE, 11, "bold"), anchor="w",
                                     justify="left", wraplength=1150)
         self.lbl_resumen.pack(fill="x", padx=14, pady=(8, 0))
-        tk.Label(self.top, text="Doble clic en una fila: abre la cotización  ·  clic en un título: ordena por esa columna",
+        tk.Label(self.top, text="Doble clic en una fila: abre la cotización  ·  clic en un título: ordena por esa columna"
+                 "  ·  Var.: cambio frente a la cotización anterior del mismo producto (rojo = subió)",
                  bg=FONDO, fg=GRIS, font=(FUENTE, 9), anchor="w").pack(fill="x", padx=14)
 
         # ---- tabla ----
@@ -570,6 +690,7 @@ class Planilla:
         marco.columnconfigure(0, weight=1)
         self.tabla.tag_configure("barato", background="#DCFCE7")
         self.tabla.tag_configure("par", background="#F9FAFB")
+        self.tabla.tag_configure("alza", background="#FEE2E2", foreground="#9C0006")
         self.tabla.bind("<Double-1>", self.abrir_pdf)
         st = ttk.Style(self.top)
         st.configure("Treeview", font=(FUENTE, 10), rowheight=26)
@@ -616,7 +737,7 @@ class Planilla:
 
     def ordenar(self, columna: str) -> None:
         col, rev = self.orden
-        self.orden = (columna, not rev if col == columna else columna in ("fecha", "total", "precio", "cantidad"))
+        self.orden = (columna, not rev if col == columna else columna in ("fecha", "total", "precio", "cantidad", "var"))
         self.aplicar()
 
     def aplicar(self) -> None:
@@ -646,6 +767,7 @@ class Planilla:
         claves_orden = {
             "descripcion": lambda t: (t[0].get("descripcion") or "").lower(),
             "precio": lambda t: t[0].get("precio_unitario") or 0,
+            "var": lambda t: self.app.var_precio.get(id(t[0]), (-9.0,))[0],
             "cantidad": lambda t: t[0].get("cantidad") or 0,
             "unidad": lambda t: (t[0].get("unidad") or "").lower(),
             "total": lambda t: t[0].get("total") or 0,
@@ -655,6 +777,7 @@ class Planilla:
             "categoria": lambda t: t[0].get("categoria") or "",
         }
         filas.sort(key=claves_orden[col], reverse=rev)
+        var_precio = self.app.var_precio
         for clave_c, titulo, *_ in self.COLUMNAS:
             flecha = (" ▼" if rev else " ▲") if clave_c == col else ""
             self.tabla.heading(clave_c, text=titulo + flecha)
@@ -676,9 +799,12 @@ class Planilla:
             mon = d.get("moneda", "")
             es_barato = (minimo is not None and it["precio_unitario"] == minimo
                          and id(filas[n]) in ids_principal)
-            tag = ("barato",) if es_barato else (("par",) if n % 2 else ())
+            var = var_precio.get(id(it))
+            alza = var is not None and var[0] >= 0.005
+            tag = ("barato",) if es_barato else ("alza",) if alza else (("par",) if n % 2 else ())
             iid = self.tabla.insert("", "end", tags=tag, values=(
                 it.get("descripcion", ""), _dinero(it.get("precio_unitario"), mon),
+                f"{var[0]:+.0%}" if var is not None else "",
                 f"{it['cantidad']:g}" if it.get("cantidad") is not None else "", it.get("unidad", ""),
                 _dinero(it.get("total"), mon), d.get("proveedor", ""), _fecha_txt(d.get("fecha", "")),
                 d.get("numero", ""), it.get("categoria", "")))
@@ -723,6 +849,59 @@ class Planilla:
         if sel and sel[0] in self.claves and carpeta:
             abrir(Path(carpeta) / self.claves[sel[0]])
 
+    def historial(self) -> None:
+        """Historial de precios del producto de la fila elegida (o del producto buscado)."""
+        sel = self.tabla.selection()
+        it = None
+        if sel and sel[0] in self.claves:
+            fila = self.tabla.index(sel[0])
+            if fila < len(self.visibles):
+                it = self.visibles[fila][0]
+        if it is None and self._grupo_principal:
+            it = self._grupo_principal[0][0][0]
+        if it is None:
+            messagebox.showinfo("Historial de precios", "Elige una fila de la tabla (un clic) o busca un producto, y "
+                                                        "luego presiona \"Historial de precios\".", parent=self.top)
+            return
+        grupo = self.app.grupo_de.get(id(it))
+        if not grupo:
+            messagebox.showinfo("Historial de precios", "Esa línea no tiene precio.", parent=self.top)
+            return
+        Historial(self.app, self.top, grupo)
+
+    def _texto_filtros(self) -> str:
+        partes = []
+        if self.txt.get().strip():
+            partes.append(f"búsqueda \"{self.txt.get().strip()}\"")
+        for nombre, cb in (("empresa", self.cb_empresa), ("categoría", self.cb_cat), ("moneda", self.cb_moneda)):
+            if cb.get() != self.TODAS:
+                partes.append(f"{nombre} {cb.get()}")
+        if self.txt_desde.get().strip() or self.txt_hasta.get().strip():
+            partes.append(f"fechas {self.txt_desde.get().strip() or '…'} a {self.txt_hasta.get().strip() or '…'}")
+        return ", ".join(partes) or "sin filtros"
+
+    def exportar_pdf(self) -> None:
+        """Guarda las líneas filtradas en un PDF (para enviar o imprimir)."""
+        if not self.visibles:
+            messagebox.showinfo("Exportar", "No hay líneas para exportar.", parent=self.top)
+            return
+        try:
+            import exportar_pdf
+        except ImportError:
+            messagebox.showerror("Exportar a PDF", "Falta la librería reportlab. Se instala sola con la próxima "
+                                                   "actualización del programa (o reinstálalo).", parent=self.top)
+            return
+        ruta = filedialog.asksaveasfilename(parent=self.top, defaultextension=".pdf", initialfile="Precios filtrados.pdf",
+                                            filetypes=[("PDF", "*.pdf")], title="Guardar líneas filtradas en PDF")
+        if not ruta:
+            return
+        try:
+            exportar_pdf.precios_pdf(Path(ruta), self.visibles, self._texto_filtros(), self.app.var_precio)
+        except PermissionError:
+            messagebox.showerror("Exportar", "No se pudo guardar: ¿el PDF está abierto?", parent=self.top)
+            return
+        abrir(Path(ruta))
+
     def exportar(self) -> None:
         """Guarda en un Excel solo las líneas filtradas."""
         if not self.visibles:
@@ -762,6 +941,124 @@ class Planilla:
             messagebox.showerror("Exportar", "No se pudo guardar: ¿el archivo está abierto en Excel?", parent=self.top)
             return
         abrir(Path(ruta))
+
+
+class Historial:
+    """Cómo cambió el precio de un producto en el tiempo y entre proveedores (gráfico + lista)."""
+
+    COLORES = ("#0B6E3A", "#E8700A", "#0E7490", "#D62828", "#7C3AED", "#CA8A04", "#DB2777", "#4B5563")
+
+    def __init__(self, app: "Ventana", padre, grupo: list):
+        self.app = app
+        puntos = sorted(((t[2].get("fecha"), t[1]["precio_unitario"], t[2].get("proveedor") or "¿proveedor?", t)
+                         for t in grupo if t[2].get("fecha")), key=lambda p: p[0])
+        self.moneda = grupo[0][2].get("moneda", "")
+        nombre = descripcion_representativa([t[1].get("descripcion", "") for t in grupo])
+        uni = unidad_normal(grupo[0][1].get("unidad", "")) or "unidad"
+        self.top = tk.Toplevel(padre)
+        self.top.title(f"Historial de precios — {nombre[:60]}")
+        self.top.configure(bg=FONDO)
+        try:
+            self.top.iconbitmap(str(BASE / "icono_cotizaciones.ico"))
+        except Exception:
+            pass
+        tk.Label(self.top, text=nombre, bg=FONDO, fg=VERDE_OSC, font=(FUENTE, 13, "bold"), anchor="w",
+                 wraplength=880, justify="left").pack(fill="x", padx=14, pady=(12, 0))
+        if not puntos:
+            tk.Label(self.top, text="Las cotizaciones de este producto no tienen fecha: no se puede armar el historial.",
+                     bg=FONDO, fg=ROJO, font=(FUENTE, 11)).pack(padx=14, pady=20)
+            return
+        precios = [p[1] for p in puntos]
+        cambio = precios[-1] / precios[0] - 1 if precios[0] else 0
+        barato = min(puntos, key=lambda p: p[1])
+        resumen = (f"Precio por {uni} en {self.moneda or 'CLP'}:   primero {_dinero(precios[0], self.moneda)} "
+                   f"({_fecha_txt(puntos[0][0])})   ·   último {_dinero(precios[-1], self.moneda)} "
+                   f"({_fecha_txt(puntos[-1][0])})   ·   cambio {cambio:+.0%}   ·   mínimo {_dinero(barato[1], self.moneda)} "
+                   f"({barato[2][:30]})   ·   {len(puntos)} cotizaciones")
+        tk.Label(self.top, text=resumen, bg=FONDO, fg=ROJO if cambio > 0.005 else TEXTO, font=(FUENTE, 10, "bold"),
+                 anchor="w", wraplength=880, justify="left").pack(fill="x", padx=14, pady=(2, 6))
+        self.lienzo = tk.Canvas(self.top, width=900, height=360, bg=TARJETA, highlightthickness=1,
+                                highlightbackground=BORDE)
+        self.lienzo.pack(fill="both", expand=True, padx=14)
+        self.puntos = puntos
+        self.lienzo.bind("<Configure>", lambda e: self.dibujar())
+
+        cols = (("fecha", "Fecha", 95, "center"), ("empresa", "Empresa", 260, "w"), ("precio", "Precio unitario", 120, "e"),
+                ("var", "Var.", 70, "e"), ("cantidad", "Cantidad", 80, "e"), ("numero", "N° cot.", 90, "w"))
+        marco = tk.Frame(self.top, bg=FONDO)
+        marco.pack(fill="both", expand=False, padx=14, pady=10)
+        self.tabla = ttk.Treeview(marco, columns=[c[0] for c in cols], show="headings", height=7)
+        for c, t, w, a in cols:
+            self.tabla.heading(c, text=t)
+            self.tabla.column(c, width=w, anchor=a, stretch=c == "empresa")
+        sy = ttk.Scrollbar(marco, orient="vertical", command=self.tabla.yview)
+        self.tabla.configure(yscrollcommand=sy.set)
+        self.tabla.pack(side="left", fill="both", expand=True)
+        sy.pack(side="right", fill="y")
+        self.tabla.tag_configure("alza", background="#FEE2E2", foreground="#9C0006")
+        self.claves = {}
+        for f, precio, prov, t in reversed(puntos):
+            var = app.var_precio.get(id(t[1]))
+            iid = self.tabla.insert("", "end", tags=("alza",) if var and var[0] >= 0.005 else (), values=(
+                _fecha_txt(f), prov, _dinero(precio, self.moneda), f"{var[0]:+.0%}" if var else "",
+                f"{t[1]['cantidad']:g}" if t[1].get("cantidad") is not None else "", t[2].get("numero", "")))
+            self.claves[iid] = t[3]
+        self.tabla.bind("<Double-1>", self.abrir_pdf)
+        tk.Label(self.top, text="Doble clic en una fila: abre la cotización", bg=FONDO, fg=GRIS,
+                 font=(FUENTE, 9)).pack(anchor="w", padx=14, pady=(0, 10))
+        self.top.geometry(f"960x{min(760, self.top.winfo_screenheight() - 80)}+60+30")
+
+    def abrir_pdf(self, _evento=None) -> None:
+        sel = self.tabla.selection()
+        carpeta = self.app.compartido.get("carpeta")
+        if sel and sel[0] in self.claves and carpeta:
+            abrir(Path(carpeta) / self.claves[sel[0]])
+
+    def dibujar(self) -> None:
+        c = self.lienzo
+        c.delete("all")
+        ancho, alto = max(c.winfo_width(), 300), max(c.winfo_height(), 200)
+        izq, der, arr, aba = 95, 230, 20, 40  # márgenes (a la derecha, la leyenda)
+        fechas = [datetime.date.fromisoformat(p[0]).toordinal() for p in self.puntos]
+        precios = [p[1] for p in self.puntos]
+        f0, f1 = min(fechas), max(fechas)
+        p0, p1 = min(precios), max(precios)
+        if p0 == p1:
+            p0, p1 = p0 * 0.9, p1 * 1.1 or 1
+        margen = (p1 - p0) * 0.1
+        p0, p1 = max(0, p0 - margen), p1 + margen
+
+        def x(f):
+            return izq + (ancho - izq - der) * ((f - f0) / (f1 - f0) if f1 > f0 else 0.5)
+
+        def y(p):
+            return arr + (alto - arr - aba) * (1 - (p - p0) / (p1 - p0))
+
+        for i in range(5):  # líneas guía con el precio
+            valor = p0 + (p1 - p0) * i / 4
+            c.create_line(izq, y(valor), ancho - der, y(valor), fill=BORDE)
+            c.create_text(izq - 8, y(valor), text=_dinero(valor, self.moneda), anchor="e", fill=GRIS, font=(FUENTE, 8))
+        marcas = [fechas[0]]
+        for f in (fechas[len(fechas) // 2], fechas[-1]):  # sin fechas encimadas
+            if x(f) - x(marcas[-1]) >= 80:
+                marcas.append(f)
+            elif f == fechas[-1] and len(marcas) > 1:
+                marcas[-1] = f
+        for f in marcas:
+            c.create_text(x(f), alto - aba + 14, text=datetime.date.fromordinal(f).strftime("%d-%m-%Y"), fill=GRIS,
+                          font=(FUENTE, 8))
+        proveedores = list(dict.fromkeys(p[2] for p in self.puntos))
+        color = {prov: self.COLORES[i % len(self.COLORES)] for i, prov in enumerate(proveedores)}
+        coords = [(x(f), y(p)) for f, p in zip(fechas, precios)]
+        if len(coords) > 1:
+            c.create_line(*[v for xy in coords for v in xy], fill="#9CA3AF", width=2)
+        for (cx, cy), punto in zip(coords, self.puntos):
+            c.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, fill=color[punto[2]], outline="white", width=2)
+        for i, prov in enumerate(proveedores[:14]):  # leyenda
+            ly = arr + 8 + i * 22
+            c.create_oval(ancho - der + 16, ly - 6, ancho - der + 28, ly + 6, fill=color[prov], outline="")
+            c.create_text(ancho - der + 36, ly, text=prov if len(prov) <= 24 else prov[:23] + "…", anchor="w",
+                          fill=TEXTO, font=(FUENTE, 9))
 
 
 def iniciar() -> None:

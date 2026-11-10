@@ -28,11 +28,15 @@ from pathlib import Path
 if sys.version_info < (3, 11):
     sys.exit("Se necesita Python 3.11 o superior (https://www.python.org/downloads/).")
 
+import shutil  # noqa: E402
 import tomllib  # noqa: E402
+from datetime import date  # noqa: E402
 
 from actualizador import actualizar_si_hay, version_local
-from agrupador import asegurar_sinonimos
-from clasificador import clasificar_una, clasificar_y_copiar, es_clasificada, fecha_archivo, leer_categorias
+from agrupador import agrupar, asegurar_sinonimos, variaciones
+from clasificador import (borrar_copias, clasificar_una, clasificar_y_copiar, es_clasificada, fecha_archivo,
+                          leer_categorias)
+import correo  # noqa: E402
 from consola import Barra, ManejadorConsola, _duracion, estado_vigilancia, terminado
 from excel_writer import construir_excel
 from extractor import extraer_cotizacion
@@ -63,6 +67,14 @@ CONFIG_DEFECTO = {
     "actualizar_automatico": True,
     "horas_entre_actualizaciones": 6,
     "token_github": "",
+    "respaldos_dias": 14,
+    "correo_usuario": "",
+    "correo_clave": "",
+    "correo_servidor": "",
+    "correo_carpeta": "INBOX",
+    "correo_palabras": ["cotiz", "presupuesto", "proforma", "oferta"],
+    "correo_dias": 30,
+    "correo_minutos": 10,
 }
 
 
@@ -120,18 +132,25 @@ def leer_config() -> dict:
     return cfg
 
 
+def guardar_valores(cfg: dict, valores: dict) -> None:
+    """Escribe valores en config.toml conservando el resto del archivo (comentarios incluidos)."""
+    cfg.update(valores)
+    lineas = CONFIG.read_text(encoding="utf-8-sig").splitlines() if CONFIG.exists() else []
+    for clave, valor in valores.items():
+        linea = f"{clave} = {_toml_valor(valor)}"
+        patron = re.compile(rf"^\s*{re.escape(clave)}\s*=")
+        for i, l in enumerate(lineas):
+            if patron.match(l):
+                lineas[i] = linea
+                break
+        else:
+            lineas.append(linea)
+    CONFIG.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+
+
 def guardar_carpeta(cfg: dict, carpeta: Path) -> None:
     """Escribe la carpeta en config.toml conservando el resto del archivo."""
-    cfg["carpeta_cotizaciones"] = str(carpeta)
-    linea = f"carpeta_cotizaciones = {_toml_valor(str(carpeta))}"
-    if CONFIG.exists():
-        lineas = CONFIG.read_text(encoding="utf-8").splitlines()
-        lineas = [linea if l.strip().startswith("carpeta_cotizaciones") else l for l in lineas]
-        if linea not in lineas:
-            lineas.insert(0, linea)
-        CONFIG.write_text("\n".join(lineas) + "\n", encoding="utf-8")
-    else:
-        CONFIG.write_text("\n".join(f"{k} = {_toml_valor(v)}" for k, v in cfg.items()) + "\n", encoding="utf-8")
+    guardar_valores(cfg, {"carpeta_cotizaciones": str(carpeta)})
 
 
 def elegir_carpeta() -> Path | None:
@@ -373,11 +392,17 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
 
         def registrar(clave: str, st: os.stat_result, h: str, datos: dict) -> None:
             nonlocal copias
-            if categorias is not None:  # se copia a su carpeta apenas se lee
-                copias += clasificar_una(datos, clave, carpeta, categorias)
+            anteriores = db.get(clave, {}).get("copias")
             db[clave] = {"hash": h, "tamano": st.st_size, "mtime": st.st_mtime,
                          "procesado": datetime.now().isoformat(timespec="seconds"), "datos": datos}
+            if categorias is not None:  # se copia a su carpeta apenas se lee
+                nuevas, rutas = clasificar_una(datos, clave, carpeta, categorias)
+                copias += nuevas
+                db[clave]["copias"] = rutas
+                if anteriores:  # el PDF cambió: quitar copias que ya no corresponden
+                    borrar_copias(carpeta, [r for r in anteriores if r not in rutas])
             por_hash[h] = clave
+            cfg.setdefault("_nuevas", []).append(clave)  # para avisar alzas de precio
             detalle = f"Error en {clave}: {datos['observaciones'][0]}" if datos.get("metodo") == "error" \
                 else f"{clave}  ->  {_resumen(datos)}"
             seg_pdf = datos.pop("_segundos", 0)
@@ -411,10 +436,17 @@ def escanear(cfg: dict, carpeta: Path, db: dict, reprocesar: bool = False, guard
         cambios = True
 
     if cfg["quitar_borrados"]:
+        sin_original: list[str] = []
         for clave in [c for c in db if c not in vigentes]:
             log.info("Ya no está en la carpeta: %s (se quita del Excel)", clave)
+            sin_original += db[clave].get("copias", [])
             del db[clave]
             cambios = True
+        if sin_original:  # sus copias en Clasificadas también sobran (salvo que otra cotización las use)
+            en_uso = {r for reg in db.values() for r in reg.get("copias", [])}
+            n = borrar_copias(carpeta, sin_original, en_uso)
+            if n:
+                log.info("Copias quitadas de Clasificadas (se borró la cotización original): %d", n)
     return cambios
 
 
@@ -460,6 +492,98 @@ def _limpiar_temporales(*carpetas: Path) -> None:
                         pass
             except OSError:
                 pass
+
+
+def respaldar(excel: Path, archivo_db: Path, guardar: int) -> bool:
+    """Una copia diaria del Excel y de los datos leídos en <carpeta del Excel>/Respaldos (se guardan los últimos
+    `guardar` días). Si algo se daña o se borra, basta copiar el respaldo de vuelta. True si respaldó hoy."""
+    if guardar <= 0 or not archivo_db.exists():
+        return False
+    carpeta = excel.parent / "Respaldos"
+    hoy = date.today().isoformat()
+    destino_db = carpeta / f"{archivo_db.stem}_{hoy}.json"
+    if destino_db.exists():
+        return False
+    try:
+        carpeta.mkdir(exist_ok=True)
+        if excel.exists():
+            shutil.copy2(excel, carpeta / f"{excel.stem}_{hoy}{excel.suffix}")
+        shutil.copy2(archivo_db, destino_db)
+    except OSError as e:  # Excel abierto, disco lleno...: se reintenta en la próxima pasada
+        log.warning("No se pudo hacer el respaldo diario: %s", e)
+        destino_db.unlink(missing_ok=True)
+        return False
+    for base, ext in ((excel.stem, excel.suffix), (archivo_db.stem, ".json")):
+        viejos = sorted(carpeta.glob(f"{base}_????-??-??{ext}"))[:-guardar]
+        for f in viejos:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    log.info("Respaldo del día guardado en %s", carpeta)
+    return True
+
+
+ALZA_AVISO = 0.05  # desde 5 % de alza se avisa
+
+
+def _miles(v: float) -> str:
+    return f"{v:,.0f}".replace(",", ".") if v >= 100 else f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def avisar_alzas(cfg: dict, db: dict, maximo: int = 15) -> list[str]:
+    """Avisa (en el registro y en la ventana) los productos que subieron de precio en las cotizaciones recién
+    leídas, frente a la cotización anterior del mismo producto. Devuelve los avisos."""
+    nuevas = set(cfg.pop("_nuevas", []))
+    if not nuevas:
+        return []
+    elementos = []
+    for clave, reg in list(db.items()):
+        d = reg.get("datos", {})
+        for it in d.get("items", []):
+            if it.get("precio_unitario") and it.get("descripcion"):
+                elementos.append((it["descripcion"], it.get("unidad", ""), d.get("moneda", ""), (it, d, clave)))
+    var = variaciones(agrupar(elementos), fecha=lambda t: t[1].get("fecha") or "",
+                      precio=lambda t: t[0]["precio_unitario"], cotizacion=lambda t: t[2])
+    avisos = []
+    for _, _, _, t in elementos:
+        v = var.get(id(t))
+        if t[2] not in nuevas or not v or v[0] < ALZA_AVISO:
+            continue
+        (it, d, _), (it_a, d_a, _) = t, v[1]
+        mon = d.get("moneda", "")
+        avisos.append(f"ALZA DE PRECIO {v[0]:+.0%}: {it['descripcion'][:60]} — {d.get('proveedor') or '?'} "
+                      f"{mon} {_miles(it['precio_unitario'])} (antes {_miles(it_a['precio_unitario'])}, "
+                      f"{d_a.get('proveedor') or '?'}, {d_a.get('fecha') or '?'})")
+    if len(nuevas) > 30:  # carga grande (primera vez): un resumen en vez de una lista larga
+        if avisos:
+            log.info("Hay %d alza(s) de precio entre las cotizaciones leídas: mira la columna \"Var. vs anterior\" "
+                     "de la hoja Precios (en rojo).", len(avisos))
+        return avisos
+    for a in avisos[:maximo]:
+        log.warning(a)
+    if len(avisos) > maximo:
+        log.warning("... y %d alza(s) más: mira la columna \"Var. vs anterior\" de la hoja Precios.", len(avisos) - maximo)
+    return avisos
+
+
+def revisar_correo(cfg: dict, carpeta: Path, archivo_estado: Path) -> None:
+    """Baja las cotizaciones del correo en segundo plano (no detiene la lectura de la carpeta)."""
+    if not correo.configurado(cfg) or cfg.get("_correo_error"):
+        return
+
+    def tarea() -> None:
+        try:
+            n = correo.revisar(cfg, carpeta, archivo_estado)
+            if n:
+                log.info("Correo: %d cotización(es) nueva(s) guardada(s) en la carpeta %s.", n, correo.CARPETA_CORREO)
+        except correo.ErrorCorreo as e:
+            cfg["_correo_error"] = str(e)  # no insistir cada 10 minutos con una clave mala
+            log.warning("Correo: %s  (corrígelo con el botón Correo de la ventana)", e)
+        except Exception as e:
+            log.warning("Correo: no se pudo revisar (%s); se reintentará.", e)
+
+    threading.Thread(target=tarea, daemon=True).start()
 
 
 def candado_instancia():
@@ -528,6 +652,7 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
     excel = args.excel or (Path(cfg["archivo_excel"]) if cfg["archivo_excel"] else carpeta / "Base_Cotizaciones.xlsx")
     cfg["_excel"] = str(excel.resolve())
     archivo_db = excel.with_name(excel.stem + "_datos.json")
+    archivo_correo = excel.with_name(excel.stem + "_correo.json")
     _limpiar_temporales(excel.parent, BASE)
 
     if args.abrir:
@@ -572,12 +697,16 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
             actualizar_excel(cfg, carpeta, db, en_barra=True)
             ultimo_excel[0] = time.monotonic()
 
+    if args.vigilar:
+        revisar_correo(cfg, carpeta, archivo_correo)  # en paralelo: lo que llegue se lee en la siguiente pasada
     cambios = escanear(cfg, carpeta, db, args.reprocesar, guardar_avance) or excel_de_otra_version
     fecha_cat = fecha_archivo()
     fecha_sin = fecha_sinonimos()
     cambios = clasificar_y_copiar(db, carpeta, cfg, todo=True) or cambios  # por si cambiaron las categorías
     guardar_db(archivo_db, db)
     pendiente = cambios and not actualizar_excel(cfg, carpeta, db)
+    avisar_alzas(cfg, db)
+    respaldar(excel, archivo_db, int(cfg["respaldos_dias"]))
     if not cambios:
         log.info("Sin cotizaciones nuevas. Excel al día: %s", excel)
     _titulo_consola("Buscador de cotizaciones - " + ("vigilando" if args.vigilar else "terminado"))
@@ -598,6 +727,8 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
         return 0
     cada_act = max(1.0, float(cfg["horas_entre_actualizaciones"])) * 3600
     proxima_act = time.monotonic() + cada_act
+    cada_correo = max(2.0, float(cfg["correo_minutos"])) * 60
+    proximo_correo = time.monotonic() + cada_correo
     try:
         while not (detener and detener.is_set()):
             estado_vigilancia(len(db), ultima, tick)  # línea siempre presente
@@ -612,6 +743,14 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
             if time.monotonic() > proxima_act:
                 proxima_act = time.monotonic() + cada_act
                 actualizar_si_hay(cfg)  # se reinicia solo si encontró una versión nueva
+            if time.monotonic() > proximo_correo:
+                proximo_correo = time.monotonic() + cada_correo
+                revisar_correo(cfg, carpeta, archivo_correo)
+            if detener is not None and getattr(detener, "correo_ya", False):
+                detener.correo_ya = False  # se acaba de configurar el correo en la ventana
+                cfg.update({k: v for k, v in leer_config().items() if k.startswith("correo_")})
+                cfg.pop("_correo_error", None)
+                revisar_correo(cfg, carpeta, archivo_correo)
             if time.monotonic() < proxima:
                 continue
             proxima = time.monotonic() + intervalo
@@ -634,6 +773,8 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
                 pendiente = True
             if pendiente:
                 pendiente = not actualizar_excel(cfg, carpeta, db)
+            avisar_alzas(cfg, db)
+            respaldar(excel, archivo_db, int(cfg["respaldos_dias"]))  # una vez al día (si ya está, no hace nada)
             if "_ultima_lectura" in cfg:
                 leidas, seg = cfg["_ultima_lectura"]
                 terminado(leidas, seg, len(db), excel)

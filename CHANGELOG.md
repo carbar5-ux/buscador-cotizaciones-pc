@@ -1,5 +1,21 @@
 # Cambios
 
+## 1.10.0
+- **Alzas de precio**: la hoja Precios tiene la columna *Var. vs anterior* (rojo si subió, verde si bajó) y
+  *Precio anterior*; Revisar lista las alzas de 5 % o más; el Resumen las cuenta. La ventana avisa las alzas
+  de las cotizaciones recién leídas y la Planilla muestra la columna *Var.* con las alzas en rojo.
+- **Historial de precios** (botón en la Planilla): gráfico del precio de un producto en el tiempo, un color por
+  proveedor, con la lista de cotizaciones.
+- **Exportar a PDF** lo filtrado en la Planilla (nueva librería: reportlab; se instala sola al actualizar).
+- **Cotizaciones por correo** (botón Correo): baja por IMAP los PDF adjuntos con "cotiz", "presupuesto"...
+  a `<carpeta>/Correo/`. Solo lee: no borra ni marca correos.
+- **Respaldo diario** del Excel y los datos en `Respaldos/` (últimos 14 días).
+- **Clasificadas al día**: se quitan las copias de cotizaciones que cambiaron de categoría o cuyo PDF original
+  se borró (solo copias hechas por el programa; también reconoce las de versiones anteriores).
+- **Programa instalado**: la primera vez trae la configuración del programa anterior (carpeta, categorías y
+  sinónimos) y cambia su inicio automático al instalado.
+- GitHub Actions: checkout v7 y setup-python v7.
+
 ## Sin publicar (repositorio)
 - Se reemplaza el workflow que generaba un `.exe` (no abría la ventana, ignoraba `config.toml` y el
   actualizador se reinstalaba en cada inicio) por un **instalador de Windows** (Inno Setup) con Python

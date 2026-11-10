@@ -19,13 +19,13 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 
 ## El Excel (`Base_Cotizaciones.xlsx`)
 
-- **Precios** (la primera hoja): una fila por suministro con empresa, fecha, descripción, cantidad, unidad, precio unitario, total, moneda y N° de cotización. **Clic en el suministro abre su cotización.**
+- **Precios** (la primera hoja): una fila por suministro con empresa, fecha, descripción, cantidad, unidad, precio unitario, total, moneda y N° de cotización. **Clic en el suministro abre su cotización.** La columna **Var. vs anterior** muestra cuánto cambió el precio frente a la cotización anterior del mismo producto: **en rojo si subió**, en verde si bajó (y **Precio anterior** dice cuánto era, de quién y de cuándo).
 - **Resumen**: n° de cotizaciones, proveedores, ítems, monto cotizado, vigentes, por vencer y vencidas.
 - **Cotizaciones**: una fila por PDF, con vínculo para abrir el PDF, y el estado (Vigente / Por vencer / Vencida) en colores.
 - **Ítems**: una fila por cada línea de cada cotización, lista para filtrar o hacer tablas dinámicas.
 - **Comparativo**: agrupa el mismo producto aunque cada proveedor lo escriba distinto (columna Variantes) y muestra el precio mínimo y el proveedor más barato, el máximo, promedio, mediana, diferencia % y el último precio cotizado.
 - **Proveedores**: cotizaciones, ítems y montos por proveedor, con sus datos de contacto.
-- **Revisar**: lo que conviene verificar a mano (líneas que no cuadran, totales no encontrados, PDF escaneados o dañados, archivos duplicados).
+- **Revisar**: lo que conviene verificar a mano (líneas que no cuadran, totales no encontrados, PDF escaneados o dañados, archivos duplicados, y **alzas de precio** de 5 % o más en la última cotización de cada producto).
 
 ## Instalación en Windows con el instalador (recomendada)
 
@@ -34,6 +34,8 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 3. Quedan los accesos **Buscador Cotizaciones**, **Excel Cotizaciones** y **Manual** en el Escritorio y en el menú Inicio (opcional: abrir al encender el PC).
 
 Se instala en `%LOCALAPPDATA%\Programs\Buscador de cotizaciones`, sigue actualizándose solo desde GitHub y se desinstala en *Configuración → Aplicaciones*. Tu `config.toml`, el Excel y las cotizaciones no se tocan al reinstalar ni al desinstalar.
+
+**Si ya usabas el programa instalado con `instalar.bat`:** la primera vez que abres el programa instalado, busca el anterior (en Descargas, Documentos, Escritorio, OneDrive o donde apunten sus accesos directos) y **trae solo tu configuración**: la carpeta de cotizaciones, `categorias.txt` y `sinonimos.txt`. Si el anterior se abría al encender el PC, ese inicio pasa a abrir el instalado. Después puedes borrar la carpeta antigua y sus accesos directos.
 
 ## Instalación en Windows con Python aparte (manual)
 
@@ -70,7 +72,26 @@ El Excel queda en tu carpeta de cotizaciones como `Base_Cotizaciones.xlsx`. Junt
 
 - **Buscar precio** (arriba a la derecha): escribe un suministro, por ejemplo `cable thhn 12`, y presiona Enter. Se abre la planilla con todos sus precios, del más barato al más caro, y el resumen de precio mínimo, último y promedio. Reconoce el mismo producto escrito distinto ("Conductor N°12" = "Cable 12"). Las medidas deben coincidir: 12 AWG no trae 14 AWG.
 - **Planilla**: todas las líneas de todas las cotizaciones (descripción, precio, cantidad, unidad, total, empresa, fecha, N° y categoría), con filtros por texto, empresa, categoría, moneda y rango de fechas. Clic en un título ordena, doble clic en una fila abre el PDF, y **Exportar a Excel** guarda solo lo filtrado.
+- **Var.**: cuánto cambió el precio frente a la cotización anterior del mismo producto. Las filas que subieron se ven en rojo.
+- **Historial de precios**: elige una fila (un clic) o busca un producto y presiona el botón. Muestra un gráfico de cómo cambió el precio en el tiempo, con un color por proveedor, y la lista de cotizaciones (doble clic abre el PDF).
+- **Exportar a PDF**: guarda lo filtrado en un PDF listo para enviar o imprimir (con los filtros usados y la suma de totales).
 - Los sinónimos (conductor = cable, ampolleta = lámpara...) se editan en `sinonimos.txt` (botón **Sinónimos…** de la planilla).
+
+Cuando llegan cotizaciones nuevas con un producto **más caro** que la vez anterior (5 % o más), la ventana lo avisa en su registro: `ALZA DE PRECIO +12%: ... (antes $ ..., proveedor, fecha)`.
+
+## Cotizaciones que llegan por correo
+
+El botón **Correo** de la ventana conecta el programa a tu correo. Cada 10 minutos revisa los correos de los últimos 30 días y guarda en `<carpeta de cotizaciones>\Correo\` los **PDF adjuntos** cuyo asunto, remitente o nombre de archivo contiene alguna de las palabras (`cotiz`, `presupuesto`, `proforma`, `oferta`; se pueden cambiar). Desde ahí se leen como cualquier cotización. **No borra ni marca como leído ningún correo**, y cada correo se revisa una sola vez.
+
+- **Gmail**: necesitas una **contraseña de aplicación** (no tu clave normal). Activa la verificación en 2 pasos en tu cuenta de Google y crea la contraseña en <https://myaccount.google.com/apppasswords> (16 letras). Pégala en el botón **Correo** y presiona **Probar y guardar**.
+- **Outlook / Hotmail, Yahoo, iCloud**: el servidor se elige solo. Algunas cuentas también piden contraseña de aplicación.
+- **Correo de la empresa**: escribe el servidor IMAP que te indique quien administra el correo.
+
+La contraseña queda guardada en `config.toml` de tu PC (por eso conviene la de aplicación: se puede borrar en cualquier momento sin cambiar tu clave). **Desactivar** la borra.
+
+## Respaldo diario
+
+Una vez al día el programa guarda una copia del Excel y de los datos leídos en `<carpeta del Excel>\Respaldos\` (con la fecha en el nombre) y conserva los últimos 14 días (`respaldos_dias`). Si algo se daña o se borra, copia el respaldo de vuelta junto al Excel quitándole la fecha del nombre (`Base_Cotizaciones_datos_2026-11-10.json` → `Base_Cotizaciones_datos.json`).
 
 ## Clasificar por categoría (Cables, Alumbrado, ...)
 
@@ -83,7 +104,7 @@ Cables: cable, conductor, alambre, thhn, awg
 Alumbrado: luminaria, foco, led, reflector, proyector
 ```
 
-Cada PDF se copia a su carpeta **apenas se lee** (no al final). Una cotización entra a una categoría si alguna de sus líneas (descripción o código) o el nombre del archivo contiene una de esas palabras (sin importar mayúsculas ni tildes). Al guardar el archivo, el programa reclasifica todo solo. En el Excel, la columna **Categorías** (Cotizaciones) y **Categoría** (Ítems) permiten filtrar, y el Resumen cuenta cotizaciones por categoría. El botón **Clasificadas** abre la carpeta de copias.
+Cada PDF se copia a su carpeta **apenas se lee** (no al final). Si una cotización deja de pertenecer a una categoría (cambiaste las palabras) o borras el PDF original, su copia se quita sola de `Clasificadas` (y la carpeta, si queda vacía). El programa solo borra copias que hizo él. Una cotización entra a una categoría si alguna de sus líneas (descripción o código) o el nombre del archivo contiene una de esas palabras (sin importar mayúsculas ni tildes). Al guardar el archivo, el programa reclasifica todo solo. En el Excel, la columna **Categorías** (Cotizaciones) y **Categoría** (Ítems) permiten filtrar, y el Resumen cuenta cotizaciones por categoría. El botón **Clasificadas** abre la carpeta de copias.
 
 ## Abrir el PDF desde el Excel
 
@@ -125,6 +146,11 @@ Si el repositorio es **público**, no hace falta clave.
 | `max_paginas_tablas` | El lector de tablas revisa solo las primeras N páginas de cada PDF (10); el texto se lee completo. Acelera mucho los catálogos. |
 | `clasificar` | Copiar las cotizaciones a carpetas por categoría (ver `categorias.txt`). |
 | `procesos` | Cuántos PDF leer a la vez (0 = todos los núcleos del procesador). |
+| `respaldos_dias` | Cuántos días de respaldo guardar en `Respaldos` (0 = sin respaldo). |
+| `correo_usuario` / `correo_clave` | Correo y contraseña de aplicación para bajar cotizaciones (botón **Correo**). |
+| `correo_servidor` / `correo_carpeta` | Servidor IMAP (vacío = automático) y bandeja (`INBOX`). |
+| `correo_palabras` | Palabras que debe tener el asunto, remitente o archivo (`[]` = todos los PDF). |
+| `correo_dias` / `correo_minutos` | Revisa los correos de los últimos N días, cada N minutos. |
 
 ## PDF escaneados (opcional)
 

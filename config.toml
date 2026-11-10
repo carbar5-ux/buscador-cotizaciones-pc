@@ -53,3 +53,19 @@ max_paginas_tablas = 10
 # Clasificar cotizaciones por categoría y copiarlas a <carpeta>/Clasificadas/<Categoría>/
 # Las categorías y sus palabras clave se editan en categorias.txt (botón "Categorías" de la ventana)
 clasificar = true
+
+# Respaldo diario del Excel y de los datos en <carpeta del Excel>/Respaldos. Se guardan los últimos N días (0 = sin respaldo)
+respaldos_dias = 14
+
+# Cotizaciones por correo: baja los PDF adjuntos a <carpeta de cotizaciones>/Correo/ (más fácil: botón "Correo" de la ventana)
+# En Gmail, correo_clave es una "contraseña de aplicación" de 16 letras (ver README), no tu clave normal.
+correo_usuario = ''
+correo_clave = ''
+# Vacío = se adivina por el correo (Gmail, Outlook, Yahoo...). Para el correo de la empresa, pregunta el servidor IMAP
+correo_servidor = ''
+correo_carpeta = 'INBOX'
+# Solo se bajan los PDF cuyo asunto, remitente o nombre de archivo contiene alguna de estas palabras ([] = todos los PDF)
+correo_palabras = ['cotiz', 'presupuesto', 'proforma', 'oferta']
+# Revisa los correos de los últimos N días, cada N minutos
+correo_dias = 30
+correo_minutos = 10
