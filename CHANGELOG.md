@@ -1,5 +1,10 @@
 # Cambios
 
+## 1.10.4
+- Excel ordenado **de la más nueva a la más antigua** en Precios, Cotizaciones, Ítems y Revisar: por la fecha
+  de la cotización; las que no traen fecha se ubican por la fecha del archivo (cuándo llegó) en vez de quedar al
+  final; con la misma fecha, primero la última leída. La hoja Proveedores, del que cotizó más recientemente.
+
 ## 1.10.3
 - **Origen de cada cotización: Correo o PC.** La Planilla tiene la columna *Origen* ("✉ Correo" en azul o "PC"),
   un filtro *Origen* y el resumen dice cuántas llegaron por correo; también el Historial. En el Excel, columna

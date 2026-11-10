@@ -404,3 +404,22 @@ def test_excel_columna_origen(tmp_path):
                    for r in range(2, ws.max_row + 1)}
         assert valores == {"Prov A": "PC", "Prov B": "Correo"}, hoja
     assert wb["Precios"].cell(2, [c.value for c in wb["Precios"][1]].index("PDF") + 1).hyperlink is not None
+
+
+def test_excel_de_la_mas_nueva_a_la_mas_antigua(tmp_path):
+    import time as _t
+
+    from openpyxl import load_workbook
+
+    from excel_writer import construir_excel
+
+    hace_2_dias = _t.time() - 2 * 86400
+    db = {"vieja.pdf": _reg("Prov V", "2025-01-10", [_item("Cemento", 10)]),
+          "nueva.pdf": _reg("Prov N", "2026-05-01", [_item("Cemento", 12)]),
+          "media.pdf": _reg("Prov M", "2025-08-01", [_item("Cemento", 11)]),
+          "sin_fecha.pdf": dict(_reg("Prov S", "", [_item("Cemento", 13)]), mtime=hace_2_dias)}
+    construir_excel(db, tmp_path, tmp_path / "Base.xlsx")
+    wb = load_workbook(tmp_path / "Base.xlsx")
+    orden = [wb["Precios"].cell(r, 1).value for r in range(2, 6)]
+    assert orden == ["Prov S", "Prov N", "Prov M", "Prov V"]  # sin fecha: por la fecha del archivo (hace 2 días)
+    assert [wb["Cotizaciones"].cell(r, 5).value for r in range(2, 6)] == orden

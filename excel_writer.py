@@ -62,6 +62,17 @@ ALZA_MARCA = 0.005
 ALZA_AVISO = 0.05
 
 
+def fecha_orden(fecha: str, reg: dict) -> str:
+    """Fecha para ordenar: la de la cotización o, si no la trae, la del archivo PDF (cuándo llegó)."""
+    if fecha:
+        return fecha
+    try:
+        return datetime.fromtimestamp(float(reg.get("mtime") or 0)).date().isoformat() if reg.get("mtime") else \
+            str(reg.get("procesado", ""))[:10]
+    except (OverflowError, OSError, ValueError):
+        return str(reg.get("procesado", ""))[:10]
+
+
 def _fmt_moneda(moneda: str) -> str:
     """Formato de moneda real de Excel: $ 1.234.567 / US$ 1.234,50 / UF 12,35."""
     return {
@@ -241,7 +252,10 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     cotizaciones: list[tuple[str, Cotizacion, dict]] = []
     for clave, reg in db.items():
         cotizaciones.append((clave, Cotizacion.from_dict(reg["datos"]), reg))
-    cotizaciones.sort(key=lambda t: (t[1].fecha or "0000", t[1].proveedor), reverse=True)
+    # de la más nueva a la más antigua: por la fecha de la cotización; si no la trae, por la fecha del archivo
+    # (cuándo llegó). Con la misma fecha, primero la última que se leyó.
+    cotizaciones.sort(key=lambda t: t[1].proveedor.lower())
+    cotizaciones.sort(key=lambda t: (fecha_orden(t[1].fecha, t[2]), t[2].get("procesado", "")), reverse=True)
 
     wb = Workbook()
     wb.remove(wb.active)
@@ -404,7 +418,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         [p["nombre"], p["rut"], p["n"], p["items"], p["montos"].get("CLP") or None,
          ", ".join(f"{m} {v:,.2f}" for m, v in p["montos"].items() if m != "CLP"), _fecha(p["ultima"]),
          p["contacto"], p["email"], p["fono"]]
-        for p in sorted(prov.values(), key=lambda p: -p["n"])
+        for p in sorted(prov.values(), key=lambda p: (p["ultima"], p["n"]), reverse=True)  # el más reciente primero
     ]
     _hoja(wb, "Proveedores", col_prov, filas_prov, "TablaProveedores")
 
