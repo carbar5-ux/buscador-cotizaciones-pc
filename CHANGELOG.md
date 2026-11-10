@@ -14,6 +14,8 @@
   se borró (solo copias hechas por el programa; también reconoce las de versiones anteriores).
 - **Programa instalado**: la primera vez trae la configuración del programa anterior (carpeta, categorías y
   sinónimos) y cambia su inicio automático al instalado.
+- **Manual de uso** nuevo (10 páginas, con imágenes): instalador, ventana, Planilla, historial y alzas de
+  precio, Excel, categorías, correo (con los pasos de Gmail), respaldo, configuración y problemas frecuentes.
 - GitHub Actions: checkout v7 y setup-python v7.
 
 ## Sin publicar (repositorio)

@@ -515,7 +515,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     col_pre = [
         ("Empresa", 32, None), ("Fecha", 12, FMT_FECHA), ("Descripción", 60, None), ("Cantidad", 11, FMT_DECIMAL),
         ("Unidad", 9, None), ("Precio unitario", 16, "moneda"), ("Var. vs anterior", 12, FMT_PCT),
-        ("Precio anterior", 26, None), ("Total", 16, "moneda"), ("Moneda", 8, None),
+        ("Precio anterior", 38, None), ("Total", 16, "moneda"), ("Moneda", 8, None),
         ("N° cotización", 14, None), ("PDF", 11, None),
     ]
     filas_pre, extra_pre = [], []
@@ -525,7 +525,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
             antes = ""
             if v:
                 it_ant, c_ant, _ = v[1]
-                antes = f"{_miles(it_ant.precio_unitario)} · {c_ant.proveedor[:18]} · {_fecha_corta(c_ant.fecha)}"
+                antes = f"{_miles(it_ant.precio_unitario)} · {c_ant.proveedor[:26]} · {_fecha_corta(c_ant.fecha)}"
             filas_pre.append([c.proveedor, _fecha(c.fecha), it.descripcion, it.cantidad, it.unidad, it.precio_unitario,
                               v[0] if v else None, antes, it.total, c.moneda, c.numero, "Abrir PDF"])
             extra_pre.append((clave, _fmt_moneda(c.moneda)))
