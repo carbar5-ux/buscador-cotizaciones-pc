@@ -84,8 +84,9 @@ Cuando llegan cotizaciones nuevas con un producto **más caro** que la vez anter
 El botón **Correo** de la ventana conecta el programa a tu correo. Cada 10 minutos revisa los correos de los últimos 30 días y guarda en `<carpeta de cotizaciones>\Correo\` los **PDF adjuntos** cuyo asunto, remitente o nombre de archivo contiene alguna de las palabras (`cotiz`, `presupuesto`, `proforma`, `oferta`; se pueden cambiar). Desde ahí se leen como cualquier cotización. **No borra ni marca como leído ningún correo**, y cada correo se revisa una sola vez.
 
 - **Gmail**: necesitas una **contraseña de aplicación** (no tu clave normal). Activa la verificación en 2 pasos en tu cuenta de Google y crea la contraseña en <https://myaccount.google.com/apppasswords> (16 letras). Pégala en el botón **Correo** y presiona **Probar y guardar**.
-- **Outlook / Hotmail, Yahoo, iCloud**: el servidor se elige solo. Algunas cuentas también piden contraseña de aplicación.
-- **Correo de la empresa**: escribe el servidor IMAP que te indique quien administra el correo.
+- **Yahoo, iCloud**: el servidor se elige solo. Algunas cuentas también piden contraseña de aplicación.
+- **Correo de la empresa** (tu@empresa.cl): deja *Servidor IMAP* vacío y el programa lo busca solo (mira quién atiende el correo del dominio: Google Workspace, Microsoft 365 o el hosting, y prueba `imap.` y `mail.`); el que funciona queda guardado. Si no lo encuentra, pregunta el "servidor IMAP" a quien administra el correo (también aparece en la configuración de la cuenta en Outlook o en el celular, como correo entrante).
+- **Microsoft 365 / Outlook.com**: Microsoft ya no deja entrar con contraseña desde otros programas. Alternativa: una regla en Outlook que reenvíe los correos con cotizaciones a una cuenta Gmail, y conectar esa cuenta.
 
 La contraseña queda guardada en `config.toml` de tu PC (por eso conviene la de aplicación: se puede borrar en cualquier momento sin cambiar tu clave). **Desactivar** la borra.
 

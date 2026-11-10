@@ -527,12 +527,15 @@ class Ventana:
             if not v["correo_usuario"] or not v["correo_clave"]:
                 estado.config(text="Escribe el correo y la contraseña de aplicación.", fg=ROJO)
                 return
-            estado.config(text="Probando la conexión…", fg=TEXTO)
+            estado.config(text="Probando la conexión (si no indicaste el servidor, se busca solo)…", fg=TEXTO)
             boton.state(["disabled"])
 
             def en_hilo() -> None:
+                prueba = {k: x for k, x in self.cfg.items() if k != "_servidor_detectado"} | v
                 try:
-                    resultado["ok"] = correo.probar(dict(self.cfg, **v))
+                    texto = correo.probar(prueba)
+                    resultado["servidor"] = prueba.get("_servidor_detectado", "")
+                    resultado["ok"] = texto
                 except correo.ErrorCorreo as e:
                     resultado["error"] = str(e)
                 except Exception as e:
@@ -541,13 +544,18 @@ class Ventana:
             esperar(v)
 
         def esperar(v: dict) -> None:
-            if not resultado:
+            if "ok" not in resultado and "error" not in resultado:
                 top.after(200, lambda: esperar(v))
                 return
             boton.state(["!disabled"])
             if "error" in resultado:
                 estado.config(text=resultado.pop("error"), fg=ROJO)
                 return
+            if not v["correo_servidor"] and resultado.get("servidor"):
+                v["correo_servidor"] = resultado["servidor"]  # el que se encontró: no hay que buscarlo otra vez
+                campos["correo_servidor"].delete(0, "end")
+                campos["correo_servidor"].insert(0, v["correo_servidor"])
+            resultado.pop("servidor", None)
             guardar_valores(self.cfg, v)
             self.cfg.pop("_correo_error", None)
             self.detener.correo_ya = True  # el motor revisa el correo de inmediato

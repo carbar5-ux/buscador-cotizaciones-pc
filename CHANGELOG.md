@@ -4,6 +4,9 @@
 - No se acepta un disco completo (C:\, D:\), la carpeta de usuario ni carpetas del sistema como carpeta de
   cotizaciones: en la raíz del disco Windows no deja guardar el Excel y se leerían todos los PDF del PC. Si ya
   estaba configurada así, la ventana avisa y pide elegir la carpeta correcta (tampoco se trae del programa anterior).
+- Correo de empresa: si no se indica el servidor IMAP, se busca solo (registro MX del dominio: Google Workspace,
+  Microsoft 365 o hosting; prueba imap. y mail.) y el que funciona queda guardado. Mensajes de error que dicen
+  qué hacer (servidor no encontrado, clave de Google, Microsoft sin acceso por contraseña).
 
 ## 1.10.0
 - **Alzas de precio**: la hoja Precios tiene la columna *Var. vs anterior* (rojo si subió, verde si bajó) y
