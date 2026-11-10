@@ -115,7 +115,7 @@ El Excel usa encabezados verdes, sin cuadrícula, montos con formato `$` (o `US$
 
 ## Actualización automática
 
-Al abrirse, y cada 6 horas mientras vigila, el programa revisa si hay una versión nueva en GitHub (compara el archivo `VERSION`). Si la hay, descarga solo los archivos del programa, instala las librerías nuevas si hacen falta y se reinicia solo. **Nunca toca `config.toml`, el Excel ni los datos.** Sin internet, sigue funcionando normal. Para buscar una actualización a mano: `actualizar.bat`.
+Al abrirse, y cada 6 horas mientras vigila, el programa revisa si hay una versión nueva en GitHub (compara el archivo `VERSION`). Si la hay, descarga solo los archivos del programa, instala las librerías nuevas si hacen falta y se reinicia solo. **Nunca toca `config.toml`, el Excel ni los datos.** Sin internet, sigue funcionando normal. Para buscar una actualización en el momento: botón **Actualizar** de la ventana (o `actualizar.bat`).
 
 Si el repositorio de GitHub es **privado**, el PC necesita una clave de solo lectura:
 

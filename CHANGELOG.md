@@ -1,5 +1,9 @@
 # Cambios
 
+## 1.10.2
+- Botón **Actualizar** en la ventana: busca una versión nueva en GitHub en el momento; si hay, pregunta,
+  la instala y el programa se vuelve a abrir solo. Si no, avisa "Ya tienes la última versión".
+
 ## 1.10.1
 - No se acepta un disco completo (C:\, D:\), la carpeta de usuario ni carpetas del sistema como carpeta de
   cotizaciones: en la raíz del disco Windows no deja guardar el Excel y se leerían todos los PDF del PC. Si ya
