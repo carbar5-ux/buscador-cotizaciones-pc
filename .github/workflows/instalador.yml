@@ -9,6 +9,11 @@ on:
   pull_request:
     paths: ["instalador/**", ".github/workflows/instalador.yml"]
   workflow_dispatch:
+    inputs:
+      publicar:
+        description: "Publicar en Releases (crea la etiqueta vX.Y.Z con la versión de VERSION)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -46,10 +51,13 @@ jobs:
           name: Instalar-Buscador-Cotizaciones
           path: instalador/salida/*.exe
       - name: Publicar en Releases
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publicar)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $exe = (Get-ChildItem instalador\salida\*.exe).FullName
-          gh release create "${{ github.ref_name }}" $exe --title "Buscador de cotizaciones ${{ github.ref_name }}" --generate-notes
+          # Con etiqueta: usa esa. Ejecutado a mano: crea la etiqueta vX.Y.Z (VERSION) sobre este commit.
+          $etiqueta = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "v" + (Get-Content VERSION).Trim() }
+          gh release create $etiqueta $exe --target "${{ github.sha }}" --title "Buscador de cotizaciones $etiqueta" --generate-notes
+          if ($LASTEXITCODE) { throw "No se pudo publicar en Releases (¿ya existe $etiqueta?)" }
