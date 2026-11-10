@@ -27,6 +27,7 @@ ARCHIVO_VERSION = BASE / "VERSION"
 EXTENSIONES = {".py", ".bat", ".ico", ".md", ".pdf"}
 EXTRA = {"VERSION", "requirements.txt"}
 NUNCA = {"config.toml"}
+MAX_ZIP = 50 * 1024 * 1024  # tope de bytes al descargar/descomprimir una actualización
 
 log = logging.getLogger("cotizaciones")
 
@@ -44,7 +45,10 @@ def _pedir(url: str, token: str, crudo: bool = False, timeout: int = 15) -> byte
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+        datos = r.read(MAX_ZIP + 1)
+    if len(datos) > MAX_ZIP:
+        raise ValueError("la respuesta es demasiado grande")
+    return datos
 
 
 def version_remota(token: str) -> str:
@@ -88,9 +92,11 @@ def instalar(token: str) -> bool:
             if info.is_dir():
                 continue
             partes = Path(info.filename).parts[1:]  # quita la carpeta "dueño-repo-commit/"
-            if not partes or ".." in partes or partes[0].startswith("."):
+            if not partes or ".." in partes or partes[0].startswith(".") or info.file_size > MAX_ZIP:
                 continue
             rel = Path(*partes)
+            if rel.is_absolute() or not (BASE / rel).resolve().is_relative_to(BASE):
+                continue
             if rel.name in NUNCA or not (rel.suffix.lower() in EXTENSIONES or rel.name in EXTRA):
                 continue
             destino = BASE / rel
