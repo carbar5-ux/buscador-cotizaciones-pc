@@ -33,7 +33,10 @@ def _carpeta_configurada(carpeta: Path) -> str:
     except (OSError, tomllib.TOMLDecodeError):
         return ""
     valor = str(cfg.get("carpeta_cotizaciones") or "")
-    return valor if valor and Path(valor).is_dir() else ""
+    if not valor or not Path(valor).is_dir():
+        return ""
+    from buscador_cotizaciones import problema_carpeta  # (import aquí: evita importar todo al cargar este módulo)
+    return "" if problema_carpeta(Path(valor)) else valor
 
 
 def _carpeta_inicio() -> Path:

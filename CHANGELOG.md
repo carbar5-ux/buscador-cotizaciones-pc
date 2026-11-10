@@ -1,5 +1,10 @@
 # Cambios
 
+## 1.10.1
+- No se acepta un disco completo (C:\, D:\), la carpeta de usuario ni carpetas del sistema como carpeta de
+  cotizaciones: en la raíz del disco Windows no deja guardar el Excel y se leerían todos los PDF del PC. Si ya
+  estaba configurada así, la ventana avisa y pide elegir la carpeta correcta (tampoco se trae del programa anterior).
+
 ## 1.10.0
 - **Alzas de precio**: la hoja Precios tiene la columna *Var. vs anterior* (rojo si subió, verde si bajó) y
   *Precio anterior*; Revisar lista las alzas de 5 % o más; el Resumen las cuenta. La ventana avisa las alzas

@@ -8,6 +8,7 @@ import os
 import time
 from datetime import date, timedelta
 from email.message import EmailMessage
+from pathlib import Path
 
 import pytest
 
@@ -305,3 +306,11 @@ def test_temporal_del_correo_no_se_lee(tmp_path):
     (tmp_path / "~a.pdf").write_bytes(PDF)
     os.utime(tmp_path / "~a.pdf", (time.time() - 60,) * 2)
     assert bc.buscar_pdfs(tmp_path, True) == []
+
+
+def test_no_acepta_disco_completo_ni_carpeta_de_usuario(tmp_path):
+    raiz = Path(tmp_path.anchor)
+    assert "disco completo" in bc.problema_carpeta(raiz)
+    assert "usuario" in bc.problema_carpeta(Path.home())
+    assert bc.problema_carpeta(bc.BASE)
+    assert bc.problema_carpeta(tmp_path) == ""
