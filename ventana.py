@@ -25,8 +25,8 @@ sys.path.insert(0, str(BASE))
 
 import consola  # noqa: E402
 from actualizador import reiniciar, version_local  # noqa: E402
-from agrupador import (calza_preparado, preparar, preparar_consulta, sinonimos,  # noqa: E402
-                       unidad_normal)
+from agrupador import (agrupar, calza_preparado, descripcion_representativa, preparar,  # noqa: E402
+                       preparar_consulta, sinonimos, unidad_normal)
 from clasificador import CARPETA_CLASIFICADAS, asegurar_archivo  # noqa: E402
 from excel_writer import limpiar_texto  # noqa: E402
 from buscador_cotizaciones import candado_instancia, guardar_carpeta, leer_config, main  # noqa: E402
@@ -662,10 +662,21 @@ class Planilla:
         self.tabla.delete(*self.tabla.get_children())
         self.claves.clear()
         self.visibles = filas
-        minimo = min((t[0]["precio_unitario"] for t in filas), default=None) if q else None
+        # con búsqueda: el producto más repetido entre los resultados; se marca su precio más bajo
+        self._grupo_principal = None
+        minimo = None
+        if q and filas:
+            grupos = agrupar([(t[0].get("descripcion", ""), t[0].get("unidad", ""), t[1].get("moneda", ""), t)
+                              for t in filas[:5000]])
+            principal = max(grupos, key=len)
+            self._grupo_principal = (principal, len(grupos))
+            minimo = min(t[0]["precio_unitario"] for t in principal)
+            ids_principal = {id(t) for t in principal}
         for n, (it, d, clave) in enumerate(filas[: self.MAXIMO]):
             mon = d.get("moneda", "")
-            tag = ("barato",) if minimo is not None and it["precio_unitario"] == minimo else (("par",) if n % 2 else ())
+            es_barato = (minimo is not None and it["precio_unitario"] == minimo
+                         and id(filas[n]) in ids_principal)
+            tag = ("barato",) if es_barato else (("par",) if n % 2 else ())
             iid = self.tabla.insert("", "end", tags=tag, values=(
                 it.get("descripcion", ""), _dinero(it.get("precio_unitario"), mon),
                 f"{it['cantidad']:g}" if it.get("cantidad") is not None else "", it.get("unidad", ""),
@@ -688,19 +699,22 @@ class Planilla:
         if len(filas) > self.MAXIMO:
             partes.append(f"se muestran las primeras {self.MAXIMO:,}: usa los filtros para acotar".replace(",", "."))
         texto = "   ·   ".join(partes)
-        if con_busqueda:
-            # precio mínimo / último / promedio del grupo más común (misma moneda y unidad)
-            grupos: dict[tuple, list] = {}
-            for t in filas:
-                grupos.setdefault((t[1].get("moneda", ""), unidad_normal(t[0].get("unidad", ""))), []).append(t)
-            (mon, uni), g = max(grupos.items(), key=lambda kv: len(kv[1]))
+        if con_busqueda and self._grupo_principal:
+            # mínimo / último / promedio del producto más repetido entre los resultados (mismo producto,
+            # mismas medidas, unidad y moneda): no se promedian productos distintos que contienen la palabra
+            g, total_grupos = self._grupo_principal
+            mon = g[0][1].get("moneda", "")
+            uni = unidad_normal(g[0][0].get("unidad", ""))
             precios = [t[0]["precio_unitario"] for t in g]
             barato = min(g, key=lambda t: t[0]["precio_unitario"])
             ultimo = max(g, key=lambda t: t[1].get("fecha") or "")
-            texto += (f"\nPor {uni or 'unidad'} en {mon}:   mínimo {_dinero(min(precios), mon)} "
+            nombre = descripcion_representativa([t[0].get("descripcion", "") for t in g])[:60]
+            otros = f"   (hay {total_grupos - 1} producto(s) más: acota la búsqueda)" if total_grupos > 1 else ""
+            texto += (f"\n{nombre} — por {uni or 'unidad'} en {mon}:   mínimo {_dinero(min(precios), mon)} "
                       f"({barato[1].get('proveedor', '')[:30]}, {_fecha_txt(barato[1].get('fecha', ''))})   ·   "
                       f"último {_dinero(ultimo[0]['precio_unitario'], mon)} ({ultimo[1].get('proveedor', '')[:30]}, "
-                      f"{_fecha_txt(ultimo[1].get('fecha', ''))})   ·   promedio {_dinero(sum(precios) / len(precios), mon)}")
+                      f"{_fecha_txt(ultimo[1].get('fecha', ''))})   ·   promedio {_dinero(sum(precios) / len(precios), mon)}"
+                      f"{otros}")
         self.lbl_resumen.config(text=texto, fg=TEXTO)
 
     def abrir_pdf(self, _evento=None) -> None:

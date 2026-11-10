@@ -445,6 +445,23 @@ def fecha_sinonimos() -> float:
         return 0.0
 
 
+def _limpiar_temporales(*carpetas: Path) -> None:
+    """Borra temporales que quedan si el programa se cerró a mitad de un guardado o una actualización
+    (~tmp_*.xlsx junto al Excel, *_datos.tmp, ~act_* del actualizador). Solo los de más de 10 minutos."""
+    limite = time.time() - 600
+    for carpeta in carpetas:
+        for patron in ("~tmp_*", "*_datos.tmp", "~act_*"):
+            try:
+                for f in carpeta.glob(patron):
+                    try:
+                        if f.is_file() and f.stat().st_mtime < limite:
+                            f.unlink()
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+
+
 def candado_instancia():
     """Evita dos copias vigilando a la vez (escribirían el mismo Excel). None si ya hay otra abierta."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -511,6 +528,7 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
     excel = args.excel or (Path(cfg["archivo_excel"]) if cfg["archivo_excel"] else carpeta / "Base_Cotizaciones.xlsx")
     cfg["_excel"] = str(excel.resolve())
     archivo_db = excel.with_name(excel.stem + "_datos.json")
+    _limpiar_temporales(excel.parent, BASE)
 
     if args.abrir:
         if not excel.exists():
