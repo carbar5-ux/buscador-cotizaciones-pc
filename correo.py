@@ -17,6 +17,8 @@ import json
 import logging
 import re
 import ssl
+import subprocess
+import sys
 import threading
 import time
 from datetime import date, timedelta
@@ -44,11 +46,57 @@ class ErrorCorreo(Exception):
     """Problema para entrar al correo (clave, servidor...), con un mensaje para mostrar."""
 
 
+def _dominio(cfg: dict) -> str:
+    return str(cfg.get("correo_usuario", "")).strip().rpartition("@")[2].lower()
+
+
 def servidor_de(cfg: dict) -> str:
     if cfg.get("correo_servidor"):
         return str(cfg["correo_servidor"]).strip()
-    dominio = str(cfg.get("correo_usuario", "")).rpartition("@")[2].lower()
+    if cfg.get("_servidor_detectado"):
+        return cfg["_servidor_detectado"]
+    dominio = _dominio(cfg)
     return SERVIDORES.get(dominio, f"imap.{dominio}" if dominio else "")
+
+
+_MX: dict[str, list[str]] = {}
+
+
+def _mx(dominio: str) -> list[str]:
+    """Servidores que reciben el correo del dominio (registro MX), preguntándole al DNS con nslookup."""
+    if dominio in _MX:
+        return _MX[dominio]
+    hosts: list[str] = []
+    try:
+        extra = {"creationflags": 0x08000000} if sys.platform == "win32" else {}  # sin ventana negra
+        r = subprocess.run(["nslookup", "-type=mx", dominio], capture_output=True, text=True, timeout=15, **extra)
+        hosts = [h.rstrip(".").lower() for h in re.findall(r"mail exchanger\s*=\s*(?:\d+\s+)?(\S+)", r.stdout)]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    _MX[dominio] = hosts
+    return hosts
+
+
+def candidatos(cfg: dict) -> list[str]:
+    """Servidores IMAP a probar, en orden. Para el correo de una empresa se mira quién lo atiende (Google,
+    Microsoft o el propio hosting) y se prueban los nombres habituales."""
+    if cfg.get("correo_servidor"):
+        return [str(cfg["correo_servidor"]).strip()]
+    dominio = _dominio(cfg)
+    if not dominio:
+        return []
+    if dominio in SERVIDORES:
+        return [SERVIDORES[dominio]]
+    lista = []
+    for mx in _mx(dominio):
+        if mx.endswith(("google.com", "googlemail.com")):
+            lista.append("imap.gmail.com")  # Google Workspace
+        elif mx.endswith(("outlook.com", "office365.com")):
+            lista.append("outlook.office365.com")  # Microsoft 365
+    lista += [f"imap.{dominio}", f"mail.{dominio}"]
+    for mx in _mx(dominio):  # hosting propio: a veces el mismo servidor que recibe atiende IMAP
+        lista.append(mx)
+    return list(dict.fromkeys(lista))
 
 
 def configurado(cfg: dict) -> bool:
@@ -113,13 +161,27 @@ def guardar_pdf(destino_dir: Path, nombre: str, contenido: bytes) -> Path | None
 
 
 def conectar(cfg: dict) -> imaplib.IMAP4_SSL:
-    servidor = servidor_de(cfg)
-    if not servidor:
+    """Entra al correo. Si no se indicó el servidor, prueba los candidatos y deja el que funcionó en
+    cfg["_servidor_detectado"] (la ventana lo guarda en config.toml)."""
+    lista = candidatos(cfg)
+    if not lista:
         raise ErrorCorreo("Falta el correo (correo_usuario).")
-    try:
-        imap = imaplib.IMAP4_SSL(servidor, 993, ssl_context=ssl.create_default_context(), timeout=40)
-    except OSError as e:
-        raise ErrorCorreo(f"No se pudo conectar con {servidor}: {e}") from e
+    imap, servidor, fallas = None, "", []
+    for servidor in lista:
+        try:
+            imap = imaplib.IMAP4_SSL(servidor, 993, ssl_context=ssl.create_default_context(), timeout=20)
+            break
+        except OSError as e:
+            fallas.append(f"{servidor}: {e}")
+    if imap is None:
+        if cfg.get("correo_servidor"):
+            raise ErrorCorreo(f"No se pudo conectar con {servidor}: {fallas[-1].split(': ', 1)[-1]}. "
+                              "Revisa el nombre del servidor IMAP (o déjalo vacío para buscarlo solo).")
+        dominio = _dominio(cfg)
+        raise ErrorCorreo(f"No se encontró el servidor de correo de {dominio} (se probó: {', '.join(lista)}). "
+                          "Pregunta a quien administra el correo de la empresa cuál es el \"servidor IMAP\" y "
+                          "escríbelo en Servidor IMAP. También aparece en la configuración de la cuenta en "
+                          "Outlook o en el celular (correo entrante).")
     try:
         imap.login(str(cfg["correo_usuario"]).strip(), str(cfg["correo_clave"]).replace(" ", ""))
     except imaplib.IMAP4.error as e:
@@ -127,8 +189,19 @@ def conectar(cfg: dict) -> imaplib.IMAP4_SSL:
             imap.logout()
         except Exception:
             pass
-        raise ErrorCorreo("El correo o la clave no son correctos. En Gmail se usa una \"contraseña de aplicación\" "
-                          f"de 16 letras, no la clave normal. ({e})") from e
+        if "office365" in servidor or "outlook" in servidor:
+            raise ErrorCorreo("Microsoft (Outlook / Microsoft 365) no deja entrar con contraseña desde otros "
+                              "programas. Alternativa: en Outlook crea una regla que reenvíe los correos con "
+                              "cotizaciones a una cuenta Gmail, y conecta esa cuenta aquí. "
+                              f"({e})") from e
+        if "gmail" in servidor:
+            raise ErrorCorreo("Google no aceptó la clave. Se usa una \"contraseña de aplicación\" de 16 letras "
+                              "(myaccount.google.com/apppasswords), no la clave normal. Si es un correo de empresa "
+                              f"en Google, el administrador debe permitir IMAP. ({e})") from e
+        raise ErrorCorreo(f"El servidor {servidor} no aceptó el correo o la clave. Revisa la clave; si tu correo "
+                          f"tiene verificación en 2 pasos, usa una contraseña de aplicación. ({e})") from e
+    if not cfg.get("correo_servidor"):
+        cfg["_servidor_detectado"] = servidor
     return imap
 
 

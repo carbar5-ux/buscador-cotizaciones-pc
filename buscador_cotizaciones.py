@@ -153,6 +153,27 @@ def guardar_carpeta(cfg: dict, carpeta: Path) -> None:
     guardar_valores(cfg, {"carpeta_cotizaciones": str(carpeta)})
 
 
+def problema_carpeta(carpeta: Path) -> str:
+    """Por qué una carpeta NO sirve como carpeta de cotizaciones ("" si sirve).
+
+    Un disco completo (C:\\) o la carpeta de usuario harían leer todos los PDF del PC, y en la raíz del disco
+    Windows no deja guardar el Excel."""
+    try:
+        c = carpeta.resolve()
+    except OSError:
+        return ""
+    if c == Path(c.anchor) or len(c.parts) <= 1:
+        return (f"Elegiste el disco completo ({c}). Elige la carpeta donde están tus cotizaciones, por ejemplo "
+                "Documentos\\Cotizaciones (entra a la carpeta y pulsa Seleccionar carpeta).")
+    if c == Path.home().resolve():
+        return ("Elegiste tu carpeta de usuario completa. Elige la carpeta donde están tus cotizaciones, por ejemplo "
+                "Documentos\\Cotizaciones.")
+    if c == BASE or (len(c.parts) == 2 and c.name.lower() in ("windows", "program files", "program files (x86)",
+                                                              "programdata", "users", "usuarios")):
+        return f"La carpeta {c} no es una carpeta de cotizaciones. Elige la carpeta donde guardas tus PDF."
+    return ""
+
+
 def elegir_carpeta() -> Path | None:
     try:
         import tkinter as tk
@@ -638,12 +659,12 @@ def main(argv: list[str] | None = None, detener: threading.Event | None = None, 
     if not args.abrir:
         actualizar_si_hay(cfg)  # si hay versión nueva, se instala y el programa se reinicia solo
     carpeta = args.carpeta or (Path(cfg["carpeta_cotizaciones"]) if cfg["carpeta_cotizaciones"] else None)
-    if args.configurar or carpeta is None or not carpeta.is_dir():
+    if args.configurar or carpeta is None or not carpeta.is_dir() or problema_carpeta(carpeta):
         if carpeta is not None and not args.configurar:
-            log.warning("No existe la carpeta configurada: %s", carpeta)
+            log.warning(problema_carpeta(carpeta) if carpeta.is_dir() else f"No existe la carpeta configurada: {carpeta}")
         carpeta = elegir_carpeta()
-        if not carpeta or not carpeta.is_dir():
-            log.error("No se eligió una carpeta válida.")
+        if not carpeta or not carpeta.is_dir() or problema_carpeta(carpeta):
+            log.error(problema_carpeta(carpeta) if carpeta and carpeta.is_dir() else "No se eligió una carpeta válida.")
             return 1
         guardar_carpeta(cfg, carpeta)
         log.info("Carpeta guardada en config.toml: %s", carpeta)

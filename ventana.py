@@ -32,7 +32,7 @@ from agrupador import (agrupar, calza_preparado, descripcion_representativa, pre
 from clasificador import CARPETA_CLASIFICADAS, asegurar_archivo  # noqa: E402
 from excel_writer import limpiar_texto  # noqa: E402
 from buscador_cotizaciones import (candado_instancia, guardar_carpeta, guardar_valores, leer_config,  # noqa: E402
-                                   main)
+                                   main, problema_carpeta)
 from consola import _duracion  # noqa: E402
 
 # Colores
@@ -116,7 +116,7 @@ class Ventana:
         self._armar()
         self._ajustar_tamano()
 
-        if self.carpeta is None or not self.carpeta.is_dir():
+        if self.carpeta is None or not self.carpeta.is_dir() or problema_carpeta(self.carpeta):
             raiz.after(300, self.primera_carpeta)
         else:
             self.arrancar()
@@ -278,7 +278,7 @@ class Ventana:
                 origen = None
             self.cfg = leer_config()
             carpeta = Path(self.cfg["carpeta_cotizaciones"]) if self.cfg["carpeta_cotizaciones"] else None
-            if origen and carpeta and carpeta.is_dir():
+            if origen and carpeta and carpeta.is_dir() and not problema_carpeta(carpeta):
                 messagebox.showinfo("Buscador de cotizaciones",
                                     f"Se encontró el programa anterior en:\n{origen}\n\nSe copió tu configuración "
                                     f"(carpeta de cotizaciones, categorías y sinónimos).\n\nCuando veas que todo "
@@ -286,12 +286,19 @@ class Ventana:
                 self.carpeta = carpeta
                 self.arrancar()
                 return
-        messagebox.showinfo("Buscador de cotizaciones",
-                            "Elige la carpeta donde guardas tus cotizaciones PDF.")
-        elegida = filedialog.askdirectory(parent=self.raiz, title="Carpeta de cotizaciones PDF")
-        if not elegida:
-            self.raiz.destroy()
-            return
+        aviso = problema_carpeta(self.carpeta) if self.carpeta and self.carpeta.is_dir() else ""
+        messagebox.showinfo("Buscador de cotizaciones", (aviso + "\n\n" if aviso else "")
+                            + "Elige la carpeta donde guardas tus cotizaciones PDF.")
+        while True:
+            elegida = filedialog.askdirectory(parent=self.raiz, title="Carpeta de cotizaciones PDF",
+                                              initialdir=str(Path.home() / "Documents"))
+            if not elegida:
+                self.raiz.destroy()
+                return
+            problema = problema_carpeta(Path(elegida))
+            if not problema:
+                break
+            messagebox.showwarning("Carpeta de cotizaciones", problema)
         guardar_carpeta(self.cfg, Path(elegida))
         self.carpeta = Path(elegida)
         self.arrancar()
@@ -520,12 +527,15 @@ class Ventana:
             if not v["correo_usuario"] or not v["correo_clave"]:
                 estado.config(text="Escribe el correo y la contraseña de aplicación.", fg=ROJO)
                 return
-            estado.config(text="Probando la conexión…", fg=TEXTO)
+            estado.config(text="Probando la conexión (si no indicaste el servidor, se busca solo)…", fg=TEXTO)
             boton.state(["disabled"])
 
             def en_hilo() -> None:
+                prueba = {k: x for k, x in self.cfg.items() if k != "_servidor_detectado"} | v
                 try:
-                    resultado["ok"] = correo.probar(dict(self.cfg, **v))
+                    texto = correo.probar(prueba)
+                    resultado["servidor"] = prueba.get("_servidor_detectado", "")
+                    resultado["ok"] = texto
                 except correo.ErrorCorreo as e:
                     resultado["error"] = str(e)
                 except Exception as e:
@@ -534,13 +544,18 @@ class Ventana:
             esperar(v)
 
         def esperar(v: dict) -> None:
-            if not resultado:
+            if "ok" not in resultado and "error" not in resultado:
                 top.after(200, lambda: esperar(v))
                 return
             boton.state(["!disabled"])
             if "error" in resultado:
                 estado.config(text=resultado.pop("error"), fg=ROJO)
                 return
+            if not v["correo_servidor"] and resultado.get("servidor"):
+                v["correo_servidor"] = resultado["servidor"]  # el que se encontró: no hay que buscarlo otra vez
+                campos["correo_servidor"].delete(0, "end")
+                campos["correo_servidor"].insert(0, v["correo_servidor"])
+            resultado.pop("servidor", None)
             guardar_valores(self.cfg, v)
             self.cfg.pop("_correo_error", None)
             self.detener.correo_ya = True  # el motor revisa el correo de inmediato
@@ -566,6 +581,10 @@ class Ventana:
         elegida = filedialog.askdirectory(parent=self.raiz, title="Carpeta de cotizaciones PDF",
                                           initialdir=str(self.carpeta or Path.home()))
         if not elegida or (self.carpeta and Path(elegida) == self.carpeta):
+            return
+        problema = problema_carpeta(Path(elegida))
+        if problema:
+            messagebox.showwarning("Carpeta de cotizaciones", problema)
             return
         guardar_carpeta(self.cfg, Path(elegida))
         reiniciar()  # vuelve a abrir la ventana con la carpeta nueva

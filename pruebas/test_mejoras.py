@@ -8,6 +8,7 @@ import os
 import time
 from datetime import date, timedelta
 from email.message import EmailMessage
+from pathlib import Path
 
 import pytest
 
@@ -305,3 +306,73 @@ def test_temporal_del_correo_no_se_lee(tmp_path):
     (tmp_path / "~a.pdf").write_bytes(PDF)
     os.utime(tmp_path / "~a.pdf", (time.time() - 60,) * 2)
     assert bc.buscar_pdfs(tmp_path, True) == []
+
+
+def test_no_acepta_disco_completo_ni_carpeta_de_usuario(tmp_path):
+    raiz = Path(tmp_path.anchor)
+    assert "disco completo" in bc.problema_carpeta(raiz)
+    assert "usuario" in bc.problema_carpeta(Path.home())
+    assert bc.problema_carpeta(bc.BASE)
+    assert bc.problema_carpeta(tmp_path) == ""
+
+
+# --------------------------------------------------------------------------- servidor de correo de empresa
+
+SALIDA_NSLOOKUP = """Servidor:  router
+Address:  192.168.1.1
+
+empresa-ejemplo.cl\tMX preference = 1, mail exchanger = aspmx.l.google.com
+empresa-ejemplo.cl\tMX preference = 5, mail exchanger = alt1.aspmx.l.google.com
+"""
+
+
+def test_mx_y_candidatos(monkeypatch):
+    import subprocess
+
+    correo._MX.clear()
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, SALIDA_NSLOOKUP, ""))
+    cfg = {"correo_usuario": "yo@empresa-ejemplo.cl"}
+    assert correo._mx("empresa-ejemplo.cl") == ["aspmx.l.google.com", "alt1.aspmx.l.google.com"]
+    lista = correo.candidatos(cfg)
+    assert lista[0] == "imap.gmail.com"  # Google Workspace
+    assert "imap.empresa-ejemplo.cl" in lista and "mail.empresa-ejemplo.cl" in lista
+    assert correo.candidatos({"correo_usuario": "yo@gmail.com"}) == ["imap.gmail.com"]
+    assert correo.candidatos({"correo_usuario": "yo@x.cl", "correo_servidor": "srv.x.cl"}) == ["srv.x.cl"]
+    correo._MX.clear()
+
+
+def test_conectar_prueba_hasta_encontrar(monkeypatch):
+    import socket
+
+    correo._MX.clear()
+    monkeypatch.setattr(correo, "_mx", lambda d: [])
+    probados = []
+
+    class Falso:
+        def __init__(self, host, *a, **k):
+            probados.append(host)
+            if host != "mail.empresa-ejemplo.cl":
+                raise socket.gaierror(11001, "getaddrinfo failed")
+
+        def login(self, u, c):
+            assert c == "abcdabcdabcdabcd"
+
+    monkeypatch.setattr(correo.imaplib, "IMAP4_SSL", Falso)
+    cfg = {"correo_usuario": "yo@empresa-ejemplo.cl", "correo_clave": "abcd abcd abcd abcd"}
+    correo.conectar(cfg)
+    assert probados == ["imap.empresa-ejemplo.cl", "mail.empresa-ejemplo.cl"]
+    assert cfg["_servidor_detectado"] == "mail.empresa-ejemplo.cl"
+    assert correo.servidor_de(cfg) == "mail.empresa-ejemplo.cl"
+
+
+def test_conectar_sin_servidor_explica_que_hacer(monkeypatch):
+    import socket
+
+    monkeypatch.setattr(correo, "_mx", lambda d: [])
+
+    def falla(*a, **k):
+        raise socket.gaierror(11001, "getaddrinfo failed")
+
+    monkeypatch.setattr(correo.imaplib, "IMAP4_SSL", falla)
+    with pytest.raises(correo.ErrorCorreo, match="servidor IMAP"):
+        correo.conectar({"correo_usuario": "yo@empresa-ejemplo.cl", "correo_clave": "x"})
