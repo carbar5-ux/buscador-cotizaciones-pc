@@ -1,8 +1,10 @@
 # Cambios
 
 ## Sin publicar (repositorio)
-- Se elimina el workflow que generaba un `.exe`: no abría la ventana, ignoraba `config.toml` y el
-  actualizador se reinstalaba en cada inicio. El programa se instala con `instalar.bat`.
+- Se reemplaza el workflow que generaba un `.exe` (no abría la ventana, ignoraba `config.toml` y el
+  actualizador se reinstalaba en cada inicio) por un **instalador de Windows** (Inno Setup) con Python
+  embebido, la ventana y las librerías incluidas: `Instalar-Buscador-Cotizaciones-X.Y.Z.exe`. Se arma y se
+  prueba en GitHub Actions (`instalador/`), y se publica en Releases al crear una etiqueta `vX.Y.Z`.
 
 ## 1.9.8
 - Buscador/Planilla: el resumen (mínimo, último, promedio) se calcula para el producto más repetido entre los

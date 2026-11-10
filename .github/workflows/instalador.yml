@@ -1,0 +1,53 @@
+name: Instalador Windows
+# Arma Instalar-Buscador-Cotizaciones-X.Y.Z.exe (Python incluido) y lo prueba.
+# - En cada cambio del instalador: se arma y se prueba (queda como artefacto del workflow).
+# - A mano (Actions -> Instalador Windows -> Run workflow): igual.
+# - Al crear una etiqueta vX.Y.Z: además se publica en Releases.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: ["instalador/**", ".github/workflows/instalador.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  instalador:
+    runs-on: windows-latest
+    env:
+      PY_VERSION: "3.12.10"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+          architecture: x64
+      - name: Armar el programa con Python incluido
+        shell: pwsh
+        run: ./instalador/armar.ps1 -PyVersion $env:PY_VERSION
+      - name: Probar el programa empaquetado
+        shell: pwsh
+        run: ./instalador/probar.ps1
+      - name: Crear el instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; if ($LASTEXITCODE) { throw "No se pudo instalar Inno Setup" } }
+          $version = (Get-Content VERSION).Trim()
+          & $iscc "/DVersion=$version" instalador\buscador.iss
+          if ($LASTEXITCODE) { throw "Inno Setup falló" }
+          Get-ChildItem instalador\salida
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Instalar-Buscador-Cotizaciones
+          path: instalador/salida/*.exe
+      - name: Publicar en Releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = (Get-ChildItem instalador\salida\*.exe).FullName
+          gh release create "${{ github.ref_name }}" $exe --title "Buscador de cotizaciones ${{ github.ref_name }}" --generate-notes

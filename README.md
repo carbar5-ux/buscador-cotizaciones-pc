@@ -27,7 +27,15 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 - **Proveedores**: cotizaciones, ítems y montos por proveedor, con sus datos de contacto.
 - **Revisar**: lo que conviene verificar a mano (líneas que no cuadran, totales no encontrados, PDF escaneados o dañados, archivos duplicados).
 
-## Instalación en Windows (una sola vez)
+## Instalación en Windows con el instalador (recomendada)
+
+1. Entra a **Releases** del repositorio (<https://github.com/carbar5-ux/buscador-cotizaciones-pc/releases>) y descarga **`Instalar-Buscador-Cotizaciones-X.Y.Z.exe`**.
+2. Doble clic → **Siguiente** → **Instalar**. No pide permisos de administrador ni hace falta instalar Python: el instalador trae todo.
+3. Quedan los accesos **Buscador Cotizaciones**, **Excel Cotizaciones** y **Manual** en el Escritorio y en el menú Inicio (opcional: abrir al encender el PC).
+
+Se instala en `%LOCALAPPDATA%\Programs\Buscador de cotizaciones`, sigue actualizándose solo desde GitHub y se desinstala en *Configuración → Aplicaciones*. Tu `config.toml`, el Excel y las cotizaciones no se tocan al reinstalar ni al desinstalar.
+
+## Instalación en Windows con Python aparte (manual)
 
 1. Instala **Python 3.11 o más nuevo** desde <https://www.python.org/downloads/>. En el instalador marca **“Add python.exe to PATH”**.
 2. Descarga este repositorio (**Code → Download ZIP**) y descomprímelo en una carpeta fija, por ejemplo `C:\BuscadorCotizaciones`.
