@@ -9,6 +9,7 @@ import re
 import statistics
 from copy import copy
 import tempfile
+import time
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -516,6 +517,18 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     _guardar_atomico(wb, destino)
 
 
+def _reemplazar(origen: str, destino: Path, intentos: int = 6) -> None:
+    """os.replace con reintentos: antivirus, OneDrive o el indexador de Windows bloquean el archivo un instante."""
+    for i in range(intentos):
+        try:
+            os.replace(origen, destino)
+            return
+        except PermissionError:
+            if i == intentos - 1:
+                raise
+            time.sleep(0.5 * (i + 1))
+
+
 def _guardar_atomico(wb: Workbook, destino: Path) -> None:
     """Escribe en un temporal y reemplaza. Lanza PermissionError si el Excel está abierto."""
     destino.parent.mkdir(parents=True, exist_ok=True)
@@ -524,7 +537,7 @@ def _guardar_atomico(wb: Workbook, destino: Path) -> None:
     try:
         wb.save(tmp)
         _verificar(tmp, [h.title for h in wb.worksheets])
-        os.replace(tmp, destino)
+        _reemplazar(tmp, destino)
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)

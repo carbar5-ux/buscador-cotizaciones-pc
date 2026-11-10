@@ -429,8 +429,9 @@ def actualizar_excel(cfg: dict, carpeta: Path, db: dict, en_barra: bool = False)
         construir_excel(db, carpeta, excel, int(cfg["dias_aviso_vencimiento"]))
         log.info("Excel actualizado: %s (%d cotizaciones)", excel, len(db), extra={"solo_archivo": en_barra})
         return True
-    except PermissionError:
-        log.warning("El Excel está abierto. Ciérralo y se actualizará en la próxima pasada.")
+    except PermissionError as e:
+        log.warning("No se pudo guardar el Excel (%s). Puede estar abierto, bloqueado por OneDrive/antivirus, o la "
+                    "carpeta no permite escribir. Se reintentará en la próxima pasada. Detalle: %s", excel, e)
         return False
     except Exception:  # nunca detener la lectura por un problema al escribir el Excel
         log.exception("No se pudo escribir el Excel (se reintentará). Los datos leídos quedan guardados.")
