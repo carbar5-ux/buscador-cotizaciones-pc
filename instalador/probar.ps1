@@ -10,9 +10,9 @@ Copy-Item (Join-Path $PSScriptRoot "app") $prueba -Recurse
 $py = Join-Path $prueba "python\python.exe"
 
 # 1) Python incluido: ventana y librerías
-& $py -c "import tkinter, pdfplumber, openpyxl, pypdfium2, pip; r = tkinter.Tk(); r.withdraw(); print('Tcl/Tk', r.tk.call('info', 'patchlevel')); r.destroy()"
+& $py -c "import tkinter, pdfplumber, openpyxl, pypdfium2, reportlab, pip; r = tkinter.Tk(); r.withdraw(); print('Tcl/Tk', r.tk.call('info', 'patchlevel')); r.destroy()"
 if ($LASTEXITCODE) { throw "El Python incluido no tiene la ventana o las librerías" }
-& $py -c "import ventana, buscador_cotizaciones, actualizador; print('módulos del programa OK, versión', actualizador.version_local())"
+& $py -c "import ventana, buscador_cotizaciones, actualizador, correo, migracion, exportar_pdf; print('módulos del programa OK, versión', actualizador.version_local())"
 if ($LASTEXITCODE) { throw "No se pueden importar los módulos del programa" }
 
 # 2) Lectura real de cotizaciones de ejemplo (con todos los núcleos, como en el PC)

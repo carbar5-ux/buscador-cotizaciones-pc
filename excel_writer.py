@@ -22,7 +22,7 @@ from openpyxl.utils.indexed_list import IndexedList
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.views import Pane, Selection
 
-from agrupador import agrupar, descripcion_representativa
+from agrupador import agrupar, descripcion_representativa, variaciones
 from extractor import Cotizacion, normalizar
 
 AZUL = "0B6E3A"  # verde de la ventana del buscador (encabezados y títulos)
@@ -45,6 +45,19 @@ def _fecha(iso: str) -> date | None:
         return date.fromisoformat(iso) if iso else None
     except ValueError:
         return None
+
+
+def _fecha_corta(iso: str) -> str:
+    return f"{iso[8:10]}-{iso[5:7]}-{iso[:4]}" if iso and len(iso) >= 10 else ""
+
+
+def _miles(v: float) -> str:
+    return f"{v:,.0f}".replace(",", ".") if v >= 100 else f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+# Variación de precio: desde cuánto se marca en el Excel (rojo/verde) y desde cuánto se avisa como alza
+ALZA_MARCA = 0.005
+ALZA_AVISO = 0.05
 
 
 def _fmt_moneda(moneda: str) -> str:
@@ -310,6 +323,12 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
                  for clave, c, _ in cotizaciones for it in c.items
                  if it.precio_unitario is not None and it.descripcion]
     grupos_lista = agrupar(elementos)
+    # alza o baja de cada línea frente a la cotización anterior del mismo producto
+    var_precio = variaciones(grupos_lista, fecha=lambda t: t[1].fecha or "", precio=lambda t: t[0].precio_unitario,
+                             cotizacion=lambda t: t[2])
+    var_item = {id(t[0]): (v, ant) for g in grupos_lista for t in g if id(t) in var_precio
+                for v, ant in [var_precio[id(t)]]}
+    ultimo_de_grupo = {id(max(g, key=lambda t: t[1].fecha or "")[0]) for g in grupos_lista}
     col_cmp = [
         ("Descripción", 55, None), ("Códigos", 16, None), ("Unidad", 8, None), ("Moneda", 8, None),
         ("N° cotizaciones", 11, FMT_ENTERO), ("N° proveedores", 11, FMT_ENTERO),
@@ -391,6 +410,14 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         for obs in c.observaciones:
             filas_rev.append([ids[clave], Path(clave).name, c.proveedor, obs])
             claves_rev.append(clave)
+        for it in c.items:  # alzas de precio en la cotización más reciente de cada producto
+            v = var_item.get(id(it))
+            if v and v[0] >= ALZA_AVISO and id(it) in ultimo_de_grupo:
+                _, (it_ant, c_ant, _) = v
+                filas_rev.append([ids[clave], Path(clave).name, c.proveedor,
+                                  f"Alza de precio {v[0]:+.0%}: {it.descripcion[:70]} — antes "
+                                  f"{_miles(it_ant.precio_unitario)} ({c_ant.proveedor}, {_fecha_corta(c_ant.fecha)})"])
+                claves_rev.append(clave)
         n_rev = sum(1 for i in c.items if i.control.startswith("Revisar"))
         if n_rev:
             filas_rev.append([ids[clave], Path(clave).name, c.proveedor, f"{n_rev} línea(s) donde cantidad × precio ≠ total"])
@@ -432,6 +459,8 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
         ("Por vencer", estados.count("Por vencer"), FMT_ENTERO, "D97706"),
         ("Vencidas", estados.count("Vencida"), FMT_ENTERO, "DC2626"),
         ("Por revisar", len(filas_rev), FMT_ENTERO, "DC2626"),
+        ("Alzas de precio", sum(1 for i in ultimo_de_grupo if i in var_item and var_item[i][0] >= ALZA_AVISO),
+         FMT_ENTERO, "DC2626"),
     ]
     fondo = PatternFill("solid", fgColor=GRIS_FONDO)
     linea = Side(style="thin", color=BORDE_SUAVE)
@@ -459,7 +488,7 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     for _, c, _ in cotizaciones:
         for cat in c.categorias:
             por_cat[cat] += 1
-    fila = 14
+    fila = 5 + math.ceil(len(tarjetas) / 4) * 4 + 1
     if por_cat:
         ws.cell(fila, 2, "Cotizaciones por categoría").font = Font(name=FUENTE_XL, bold=True, size=13, color=VERDE_OSC)
         for i, (cat, n) in enumerate(sorted(por_cat.items(), key=lambda t: -t[1]), start=fila + 1):
@@ -471,7 +500,8 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
                 ws.cell(i, c).border = Border(bottom=linea)
         fila = fila + len(por_cat) + 2
     ws.cell(fila, 2, "Hojas").font = Font(name=FUENTE_XL, bold=True, size=13, color=VERDE_OSC)
-    guia = [("Precios", "una fila por suministro: empresa, fecha, descripción, cantidad y precio (clic = abre el PDF)"),
+    guia = [("Precios", "una fila por suministro: empresa, fecha, descripción, cantidad y precio (clic = abre el PDF); "
+                        "en rojo, los precios que subieron frente a la cotización anterior"),
             ("Cotizaciones", "una fila por PDF, con condiciones, totales y vigencia"),
             ("Ítems", "todas las líneas con todos sus datos"),
             ("Proveedores", "contacto y montos por proveedor"),
@@ -484,24 +514,35 @@ def construir_excel(db: dict[str, dict], carpeta: Path, destino: Path, dias_avis
     # ---------------- Hoja Precios (la primera: lo esencial de cada línea) ----------------
     col_pre = [
         ("Empresa", 32, None), ("Fecha", 12, FMT_FECHA), ("Descripción", 60, None), ("Cantidad", 11, FMT_DECIMAL),
-        ("Unidad", 9, None), ("Precio unitario", 16, "moneda"), ("Total", 16, "moneda"), ("Moneda", 8, None),
+        ("Unidad", 9, None), ("Precio unitario", 16, "moneda"), ("Var. vs anterior", 12, FMT_PCT),
+        ("Precio anterior", 38, None), ("Total", 16, "moneda"), ("Moneda", 8, None),
         ("N° cotización", 14, None), ("PDF", 11, None),
     ]
     filas_pre, extra_pre = [], []
     for clave, c, _ in cotizaciones:
         for it in c.items:
+            v = var_item.get(id(it))
+            antes = ""
+            if v:
+                it_ant, c_ant, _ = v[1]
+                antes = f"{_miles(it_ant.precio_unitario)} · {c_ant.proveedor[:26]} · {_fecha_corta(c_ant.fecha)}"
             filas_pre.append([c.proveedor, _fecha(c.fecha), it.descripcion, it.cantidad, it.unidad, it.precio_unitario,
-                              it.total, c.moneda, c.numero, "Abrir PDF"])
+                              v[0] if v else None, antes, it.total, c.moneda, c.numero, "Abrir PDF"])
             extra_pre.append((clave, _fmt_moneda(c.moneda)))
     ws = _hoja(wb, "Precios", col_pre, filas_pre, "TablaPrecios", congelar="A2")
     wb.move_sheet(ws, offset=-(len(wb.sheetnames) - 1))  # primera hoja
     for r, (clave, fmt) in enumerate(extra_pre, start=2):
         _estilo(ws.cell(r, 6), number_format=fmt)
-        _estilo(ws.cell(r, 7), number_format=fmt)
+        _estilo(ws.cell(r, 9), number_format=fmt)
         # clic en el suministro (descripción) = abre su cotización
         desc = str(ws.cell(r, 3).value or "").strip() or "(sin descripción)"
         _vincular(ws, r, 3, carpeta / clave, desc)
-        _vincular(ws, r, 10, carpeta / clave, "Abrir PDF", AZUL_BOTON)
+        _vincular(ws, r, 12, carpeta / clave, "Abrir PDF", AZUL_BOTON)
+    if filas_pre:  # alza en rojo, baja en verde
+        rango = f"G2:G{len(filas_pre) + 1}"
+        ws.conditional_formatting.add(rango, CellIsRule(operator="greaterThan", formula=[str(ALZA_MARCA)], fill=ROJO,
+                                                        font=Font(name=FUENTE_XL, size=10, bold=True, color="9C0006")))
+        ws.conditional_formatting.add(rango, CellIsRule(operator="lessThan", formula=[str(-ALZA_MARCA)], fill=VERDE))
 
     # orden de las hojas y color de cada pestaña
     orden = ["Precios", "Resumen", "Cotizaciones", "Ítems", "Proveedores", "Revisar", "Comparativo"]

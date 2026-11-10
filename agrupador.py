@@ -216,3 +216,22 @@ def calza_preparado(consulta: tuple[frozenset, list[str]], linea: tuple[frozense
     if nums_q and not nums_q <= nums_d:
         return False
     return all(any(p.startswith(q) for p in pals_d) for q in pals_q)
+
+
+def variaciones(grupos: list[list[object]], fecha, precio, cotizacion) -> dict[int, tuple[float, object]]:
+    """Cambio de precio de cada línea respecto de la cotización ANTERIOR del mismo producto.
+
+    `grupos` sale de `agrupar`; `fecha`, `precio` y `cotizacion` son funciones que sacan de cada dato su fecha ISO,
+    su precio unitario y algo que identifica su cotización. Devuelve {id(dato): (variación, dato_anterior)}, con
+    variación 0.12 = subió 12 %. La anterior es la línea de fecha más reciente ANTES de esta (de otra cotización);
+    las líneas sin fecha o sin precio no se comparan.
+    """
+    resultado: dict[int, tuple[float, object]] = {}
+    for grupo in grupos:
+        con_fecha = sorted((d for d in grupo if fecha(d) and precio(d)), key=fecha)
+        for i, dato in enumerate(con_fecha):
+            for previo in reversed(con_fecha[:i]):
+                if fecha(previo) < fecha(dato) and cotizacion(previo) != cotizacion(dato):
+                    resultado[id(dato)] = (precio(dato) / precio(previo) - 1, previo)
+                    break
+    return resultado

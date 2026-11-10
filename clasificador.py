@@ -85,32 +85,85 @@ def clasificar(datos: dict, clave: str, categorias: dict[str, list[re.Pattern]])
     return encontradas
 
 
-def _copiar(origen: Path, carpeta_cat: Path) -> bool:
-    """Copia el PDF a la carpeta de la categoría (si ya está igual, no hace nada)."""
+def _copiar(origen: Path, carpeta_cat: Path) -> tuple[Path, bool]:
+    """Copia el PDF a la carpeta de la categoría. Devuelve (copia, True si se hizo ahora / False si ya estaba)."""
     carpeta_cat.mkdir(parents=True, exist_ok=True)
     destino = carpeta_cat / origen.name
     tam = origen.stat().st_size
     n = 2
     while destino.exists():
         if destino.stat().st_size == tam:
-            return False  # ya copiado
+            return destino, False  # ya copiado
         destino = carpeta_cat / f"{origen.stem} ({n}){origen.suffix}"  # otro PDF con el mismo nombre
         n += 1
     shutil.copy2(origen, destino)
-    return True
+    return destino, True
 
 
-def clasificar_una(datos: dict, clave: str, carpeta: Path, categorias: dict[str, list[re.Pattern]]) -> int:
-    """Clasifica una cotización recién leída y copia su PDF a sus carpetas. Devuelve cuántas copias hizo."""
-    copias = 0
-    origen = carpeta / clave
-    for cat in clasificar(datos, clave, categorias):
+def _relativa(carpeta: Path, ruta: Path) -> str:
+    return ruta.relative_to(carpeta).as_posix()
+
+
+def copiar_a_categorias(origen: Path, carpeta: Path, cats: list[str], clave: str = "") -> tuple[int, list[str]]:
+    """Copia el PDF a cada categoría. Devuelve (copias nuevas, rutas de todas sus copias relativas a la carpeta)."""
+    nuevas, rutas = 0, []
+    if not origen.exists():
+        return 0, rutas
+    for cat in cats:
         try:
-            if origen.exists() and _copiar(origen, carpeta / CARPETA_CLASIFICADAS / cat):
-                copias += 1
+            destino, nueva = _copiar(origen, carpeta / CARPETA_CLASIFICADAS / cat)
+            rutas.append(_relativa(carpeta, destino))
+            nuevas += nueva
         except OSError as e:
-            log.warning("No se pudo copiar %s a %s: %s", clave, cat, e)
-    return copias
+            log.warning("No se pudo copiar %s a %s: %s", clave or origen.name, cat, e)
+    return nuevas, rutas
+
+
+def copias_existentes(origen: Path, carpeta: Path) -> list[str]:
+    """Copias de este PDF que ya hay en Clasificadas (mismo nombre, o "nombre (2)", y mismo tamaño).
+
+    Sirve para las cotizaciones clasificadas por versiones anteriores, que no anotaban sus copias."""
+    raiz = carpeta / CARPETA_CLASIFICADAS
+    if not origen.exists() or not raiz.is_dir():
+        return []
+    tam = origen.stat().st_size
+    patron = re.compile(re.escape(origen.stem) + r"(?: \(\d+\))?" + re.escape(origen.suffix) + "$", re.I)
+    rutas = []
+    for sub in raiz.iterdir():
+        if not sub.is_dir():
+            continue
+        for f in sub.iterdir():
+            try:
+                if patron.match(f.name) and f.is_file() and f.stat().st_size == tam:
+                    rutas.append(_relativa(carpeta, f))
+            except OSError:
+                pass
+    return rutas
+
+
+def borrar_copias(carpeta: Path, rutas: list[str], conservar: set[str] | None = None) -> int:
+    """Borra copias que ya no corresponden (solo dentro de Clasificadas). Quita las carpetas que queden vacías."""
+    borradas = 0
+    for r in rutas:
+        if (conservar and r in conservar) or not es_clasificada(r):
+            continue
+        f = carpeta / r
+        try:
+            if f.is_file():
+                f.unlink()
+                borradas += 1
+            if f.parent != carpeta / CARPETA_CLASIFICADAS and not any(f.parent.iterdir()):
+                f.parent.rmdir()
+        except OSError as e:
+            log.warning("No se pudo quitar la copia %s: %s", r, e)
+    return borradas
+
+
+def clasificar_una(datos: dict, clave: str, carpeta: Path, categorias: dict[str, list[re.Pattern]]) -> tuple[int, list[str]]:
+    """Clasifica una cotización recién leída y copia su PDF a sus carpetas.
+
+    Devuelve (copias hechas ahora, rutas de sus copias) — las rutas se guardan para poder quitarlas después."""
+    return copiar_a_categorias(carpeta / clave, carpeta, clasificar(datos, clave, categorias), clave)
 
 
 def fecha_archivo() -> float:
@@ -121,33 +174,42 @@ def fecha_archivo() -> float:
 
 
 def clasificar_y_copiar(db: dict, carpeta: Path, cfg: dict, todo: bool = False) -> bool:
-    """Clasifica las cotizaciones (todas si `todo`, si no solo las sin clasificar) y copia los PDF.
+    """Clasifica las cotizaciones (todas si `todo`, si no solo las sin clasificar), copia los PDF y quita las
+    copias que ya no corresponden (la cotización cambió de categoría).
 
     Devuelve True si cambió la categoría de alguna cotización (hay que rehacer el Excel).
     """
     if not cfg.get("clasificar", True):
         return False
     categorias = leer_categorias()
-    raiz = carpeta / CARPETA_CLASIFICADAS
     copias, cambio = 0, False
+    sobrantes: list[str] = []
     for clave, reg in db.items():
         datos = reg.get("datos", {})
-        if not todo and "categorias" in datos:
+        if not todo and "categorias" in datos and "copias" in reg:
             continue
         antes = datos.get("categorias")
         cats = clasificar(datos, clave, categorias)
         cambio = cambio or antes != cats
         origen = carpeta / clave
+        anteriores = reg.get("copias")
+        if anteriores is None:
+            anteriores = copias_existentes(origen, carpeta)
         if not origen.exists():
+            reg["copias"] = anteriores
             continue
-        for cat in cats:
-            try:
-                if _copiar(origen, raiz / cat):
-                    copias += 1
-            except OSError as e:
-                log.warning("No se pudo copiar %s a %s: %s", clave, cat, e)
+        nuevas, rutas = copiar_a_categorias(origen, carpeta, cats, clave)
+        copias += nuevas
+        sobrantes += [r for r in anteriores if r not in rutas]
+        reg["copias"] = rutas
     if copias:
-        log.info("Copias nuevas en %s: %d", raiz, copias)
+        log.info("Copias nuevas en %s: %d", carpeta / CARPETA_CLASIFICADAS, copias)
+    if sobrantes:
+        en_uso = {r for reg in db.values() for r in reg.get("copias", [])}
+        n = borrar_copias(carpeta, sobrantes, en_uso)
+        if n:
+            log.info("Copias quitadas de %s (la cotización ya no es de esa categoría): %d",
+                     CARPETA_CLASIFICADAS, n)
     return cambio
 
 
