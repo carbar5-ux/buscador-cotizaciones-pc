@@ -1,5 +1,9 @@
 # Cambios
 
+## Sin publicar (repositorio)
+- Se elimina el workflow que generaba un `.exe`: no abría la ventana, ignoraba `config.toml` y el
+  actualizador se reinstalaba en cada inicio. El programa se instala con `instalar.bat`.
+
 ## 1.9.8
 - Buscador/Planilla: el resumen (mínimo, último, promedio) se calcula para el producto más repetido entre los
   resultados (mismas medidas, unidad y moneda), no mezclando productos distintos que contienen la palabra
@@ -12,7 +16,6 @@
 - Más pruebas (agrupador, actualizador).
 - Descarga de actualizaciones con límite de tamaño y protección contra rutas peligrosas.
 - Scripts `instalar.sh`, `procesar.sh` y `vigilar.sh` para Linux/macOS.
-- Workflow que publica un `.exe` al crear una etiqueta `vX.Y.Z`.
 
 ## 1.9.7
 - Versión previa a este historial.

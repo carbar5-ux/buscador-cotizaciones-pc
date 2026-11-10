@@ -10,4 +10,3 @@ ruff check . && python -m pytest
 - Agrega pruebas en `pruebas/` para cada cambio de comportamiento.
 - No subas PDF reales ni datos de clientes (`pruebas/ejemplos/` está ignorado; usa `pruebas/generar_ejemplos.py`).
 - Sube la versión en `VERSION` y anota el cambio en `CHANGELOG.md`.
-- Para publicar el `.exe`: `git tag vX.Y.Z && git push --tags`.

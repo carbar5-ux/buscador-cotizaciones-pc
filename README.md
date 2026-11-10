@@ -152,4 +152,4 @@ python pruebas/generar_ejemplos.py pruebas/ejemplos
 
 ## Desarrollo
 
-Ver [`CONTRIBUTING.md`](CONTRIBUTING.md). Pruebas: `pip install -r requirements-dev.txt && python -m pytest`. Cambios: [`CHANGELOG.md`](CHANGELOG.md). Licencia: [MIT](LICENSE). Al publicar una etiqueta `vX.Y.Z` se genera un `.exe` en *Releases*.
+Ver [`CONTRIBUTING.md`](CONTRIBUTING.md). Pruebas: `pip install -r requirements-dev.txt && python -m pytest`. Cambios: [`CHANGELOG.md`](CHANGELOG.md). Licencia: [MIT](LICENSE).
