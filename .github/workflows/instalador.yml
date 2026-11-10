@@ -16,6 +16,7 @@ permissions:
 jobs:
   instalador:
     runs-on: windows-latest
+    timeout-minutes: 15
     env:
       PY_VERSION: "3.12.10"
     steps:
@@ -28,6 +29,7 @@ jobs:
         shell: pwsh
         run: ./instalador/armar.ps1 -PyVersion $env:PY_VERSION
       - name: Probar el programa empaquetado
+        timeout-minutes: 5
         shell: pwsh
         run: ./instalador/probar.ps1
       - name: Crear el instalador (Inno Setup)

@@ -21,7 +21,11 @@ $ejemplos = Join-Path $env:RUNNER_TEMP "ejemplos"
 python (Join-Path $raiz "pruebas\generar_ejemplos.py") $ejemplos
 Get-ChildItem $ejemplos -Recurse -Filter *.pdf | ForEach-Object { $_.LastWriteTime = (Get-Date).AddMinutes(-5) }
 $cfg = Join-Path $prueba "config.toml"
-(Get-Content $cfg) -replace "^actualizar_automatico = .*", "actualizar_automatico = false" | Set-Content $cfg
+# sin actualizar desde GitHub y sin la ventana "¿Abrir el Excel ahora?" (en la prueba nadie la cierra)
+(Get-Content $cfg) -replace "^actualizar_automatico = .*", "actualizar_automatico = false" `
+                   -replace "^aviso_ventana = .*", "aviso_ventana = false" `
+                   -replace "^aviso_sonido = .*", "aviso_sonido = false" | Set-Content $cfg
+if (-not (Select-String -Path $cfg -Pattern "^aviso_ventana = false" -Quiet)) { Add-Content $cfg "aviso_ventana = false" }
 & $py (Join-Path $prueba "buscador_cotizaciones.py") --carpeta $ejemplos
 if ($LASTEXITCODE) { throw "El programa terminó con error" }
 $excel = Join-Path $ejemplos "Base_Cotizaciones.xlsx"
