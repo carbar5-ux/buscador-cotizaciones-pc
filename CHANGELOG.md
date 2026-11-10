@@ -1,5 +1,12 @@
 # Cambios
 
+## 1.10.3
+- **Origen de cada cotización: Correo o PC.** La Planilla tiene la columna *Origen* ("✉ Correo" en azul o "PC"),
+  un filtro *Origen* y el resumen dice cuántas llegaron por correo; también el Historial. En el Excel, columna
+  *Origen* en Precios y Cotizaciones (Correo en azul) y tarjeta "Llegaron por correo" en el Resumen. También en
+  Exportar a Excel y a PDF.
+- Planilla: los botones Exportar quedan junto al buscador.
+
 ## 1.10.2
 - Botón **Actualizar** en la ventana: busca una versión nueva en GitHub en el momento; si hay, pregunta,
   la instala y el programa se vuelve a abrir solo. Si no, avisa "Ya tienes la última versión".

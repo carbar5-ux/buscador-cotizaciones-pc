@@ -40,6 +40,18 @@ SERVIDORES = {  # el servidor se adivina por el correo si no se indica
 MAX_CORREOS = 400  # por revisión (la primera vez puede haber muchos)
 
 _en_curso = threading.Lock()
+_NOMBRE_CORREO = re.compile(r"^\d{4}-\d{2}-\d{2} - .+ - .+\.pdf$", re.I)  # como los guarda guardar_pdf
+
+
+def es_de_correo(clave: str) -> bool:
+    """¿La cotización llegó por correo? (está en la carpeta Correo, o en la principal con el nombre que le pone
+    el programa al bajarla cuando no se usan subcarpetas)."""
+    partes = clave.replace("\\", "/").split("/")
+    return partes[0].lower() == CARPETA_CORREO.lower() or (len(partes) == 1 and bool(_NOMBRE_CORREO.match(partes[0])))
+
+
+def origen(clave: str) -> str:
+    return "Correo" if es_de_correo(clave) else "PC"
 
 
 class ErrorCorreo(Exception):

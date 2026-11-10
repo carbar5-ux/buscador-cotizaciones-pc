@@ -376,3 +376,31 @@ def test_conectar_sin_servidor_explica_que_hacer(monkeypatch):
     monkeypatch.setattr(correo.imaplib, "IMAP4_SSL", falla)
     with pytest.raises(correo.ErrorCorreo, match="servidor IMAP"):
         correo.conectar({"correo_usuario": "yo@empresa-ejemplo.cl", "correo_clave": "x"})
+
+
+# --------------------------------------------------------------------------- origen: correo o PC
+
+def test_origen_correo_o_pc():
+    assert correo.origen("Correo/2026-11-10 - Ventas - COT-1.pdf") == "Correo"
+    assert correo.origen("2026-11-10 - Ventas Ejemplo - COT-1.pdf") == "Correo"  # sin subcarpetas
+    assert correo.origen("2026/Octubre/Cotizacion 4581.pdf") == "PC"
+    assert correo.origen("Cotizacion 4581.pdf") == "PC"
+
+
+def test_excel_columna_origen(tmp_path):
+    from openpyxl import load_workbook
+
+    from excel_writer import construir_excel
+
+    db = {"a.pdf": _reg("Prov A", "2026-01-10", [_item("Cable THHN 12 AWG", 450)]),
+          "Correo/2026-03-01 - Ventas - b.pdf": _reg("Prov B", "2026-03-01", [_item("Cable THHN 12 AWG", 540)], "2")}
+    construir_excel(db, tmp_path, tmp_path / "Base.xlsx")
+    wb = load_workbook(tmp_path / "Base.xlsx")
+    for hoja in ("Precios", "Cotizaciones"):
+        ws = wb[hoja]
+        cab = [c.value for c in ws[1]]
+        col = cab.index("Origen") + 1
+        valores = {ws.cell(r, cab.index("Empresa" if hoja == "Precios" else "Proveedor") + 1).value: ws.cell(r, col).value
+                   for r in range(2, ws.max_row + 1)}
+        assert valores == {"Prov A": "PC", "Prov B": "Correo"}, hoja
+    assert wb["Precios"].cell(2, [c.value for c in wb["Precios"][1]].index("PDF") + 1).hyperlink is not None
