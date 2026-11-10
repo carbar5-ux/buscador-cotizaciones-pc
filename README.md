@@ -19,6 +19,8 @@ Programa en **Python** que busca todas las cotizaciones en PDF de una carpeta de
 
 ## El Excel (`Base_Cotizaciones.xlsx`)
 
+Todas las hojas van **de la cotización más nueva a la más antigua** (las que no traen fecha se ubican por la fecha del archivo, es decir, cuándo llegó).
+
 - **Precios** (la primera hoja): una fila por suministro con empresa, fecha, descripción, cantidad, unidad, precio unitario, total, moneda y N° de cotización. **Clic en el suministro abre su cotización.** La columna **Var. vs anterior** muestra cuánto cambió el precio frente a la cotización anterior del mismo producto: **en rojo si subió**, en verde si bajó (y **Precio anterior** dice cuánto era, de quién y de cuándo).
 - **Resumen**: n° de cotizaciones, proveedores, ítems, monto cotizado, vigentes, por vencer y vencidas.
 - **Cotizaciones**: una fila por PDF, con vínculo para abrir el PDF, y el estado (Vigente / Por vencer / Vencida) en colores.
