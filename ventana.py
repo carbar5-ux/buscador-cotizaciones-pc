@@ -25,7 +25,7 @@ sys.path.insert(0, str(BASE))
 
 import consola  # noqa: E402
 from actualizador import reiniciar, version_local  # noqa: E402
-from agrupador import (asegurar_sinonimos, calza_preparado, preparar, preparar_consulta, sinonimos,  # noqa: E402
+from agrupador import (calza_preparado, preparar, preparar_consulta, sinonimos,  # noqa: E402
                        unidad_normal)
 from clasificador import CARPETA_CLASIFICADAS, asegurar_archivo  # noqa: E402
 from excel_writer import limpiar_texto  # noqa: E402

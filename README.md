@@ -145,3 +145,11 @@ python pruebas/test_extractor.py
 ```bash
 python pruebas/generar_ejemplos.py pruebas/ejemplos
 ```
+
+## Linux / macOS
+
+`./instalar.sh`, luego `./procesar.sh` o `./vigilar.sh` (requiere Python 3.11+ y tkinter para la ventana).
+
+## Desarrollo
+
+Ver [`CONTRIBUTING.md`](CONTRIBUTING.md). Pruebas: `pip install -r requirements-dev.txt && python -m pytest`. Cambios: [`CHANGELOG.md`](CHANGELOG.md). Licencia: [MIT](LICENSE). Al publicar una etiqueta `vX.Y.Z` se genera un `.exe` en *Releases*.
